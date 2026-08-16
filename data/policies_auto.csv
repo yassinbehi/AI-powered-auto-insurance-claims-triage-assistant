@@ -1,0 +1,10 @@
+policy_id,assure,vehicule,formule,date_debut,date_fin,franchise_tnd,garanties,exclusions
+POL-001,Amira Ben Salah,Peugeot 208,tiers_plus,2025-02-01,2027-02-01,350,"rc;bris_glace;vol;incendie","usage_livraison;conducteur_non_declare"
+POL-002,Youssef Trabelsi,Renault Clio,tous_risques,2025-07-15,2026-07-15,500,"rc;collision;vol;incendie;assistance;dommages_tous_accidents","alcool;course"
+POL-003,Sarra Mansour,Kia Picanto,rc_simple,2026-01-10,2027-01-10,0,"rc","dommages_propres;bris_glace;vol"
+POL-004,Mehdi Haddad,Toyota Corolla,tous_risques,2024-12-01,2026-12-01,600,"rc;collision;vol;incendie;bris_glace;assistance","conducteur_non_declare;usage_taxi"
+POL-005,Nour Logistics,Fiat Doblo,flotte_pro,2025-03-20,2026-03-20,800,"rc;collision;vol;incendie;assistance;marchandises","surcharge;conducteur_non_habilite"
+POL-006,Karim Jaziri,Volkswagen Golf,tiers_plus,2025-11-01,2026-11-01,400,"rc;bris_glace;vol;incendie","dommages_propres_collision_responsable"
+POL-007,Leila Ferchichi,Dacia Duster,tous_risques,2026-04-01,2027-04-01,700,"rc;collision;vol;incendie;assistance;bris_glace","piste_non_autorisee"
+POL-008,Samir Ayadi,Hyundai i20,rc_simple,2025-09-01,2026-09-01,0,"rc","dommages_propres;vol;incendie;bris_glace"
+
