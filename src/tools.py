@@ -1,32 +1,57 @@
 """Data-loading tools and future business-logic stubs for claims triage."""
 
 import csv
+import functools
 from pathlib import Path
 
-_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-_POLICIES_FILE = _DATA_DIR / "policies_auto.csv"
-_CLAIMS_FILE = _DATA_DIR / "claims_auto.csv"
+from config import CLAIMS_FILE, POLICIES_FILE
 
 
 def _read_csv_rows(path: Path) -> list[dict[str, str]]:
-    with path.open(newline="", encoding="utf-8") as file:
-        return list(csv.DictReader(file))
+    try:
+        with path.open(newline="", encoding="utf-8") as file:
+            return list(csv.DictReader(file))
+    except (OSError, UnicodeDecodeError, csv.Error):
+        return []
+
+
+def _build_index(path: Path, id_field: str) -> dict[str, dict[str, str]]:
+    index: dict[str, dict[str, str]] = {}
+    for row in _read_csv_rows(path):
+        try:
+            record_id = row.get(id_field, "").strip()
+            if not record_id:
+                continue
+            index[record_id] = row
+        except (AttributeError, TypeError, ValueError):
+            continue
+    return index
+
+
+@functools.lru_cache(maxsize=1)
+def _policies_by_id() -> dict[str, dict[str, str]]:
+    return _build_index(POLICIES_FILE, "policy_id")
+
+
+@functools.lru_cache(maxsize=1)
+def _claims_by_id() -> dict[str, dict[str, str]]:
+    return _build_index(CLAIMS_FILE, "claim_id")
 
 
 def get_policy(policy_id: str) -> dict:
     """Return the policy row matching ``policy_id`` from policies_auto.csv."""
-    for row in _read_csv_rows(_POLICIES_FILE):
-        if row.get("policy_id") == policy_id:
-            return row
-    raise ValueError(f"Policy not found: {policy_id!r}")
+    try:
+        return _policies_by_id()[policy_id]
+    except KeyError as exc:
+        raise ValueError(f"Policy not found: {policy_id!r}") from exc
 
 
 def get_claim(claim_id: str) -> dict:
     """Return the claim row matching ``claim_id`` from claims_auto.csv."""
-    for row in _read_csv_rows(_CLAIMS_FILE):
-        if row.get("claim_id") == claim_id:
-            return row
-    raise ValueError(f"Claim not found: {claim_id!r}")
+    try:
+        return _claims_by_id()[claim_id]
+    except KeyError as exc:
+        raise ValueError(f"Claim not found: {claim_id!r}") from exc
 
 
 def check_coverage(policy_id: str, claim_type: str) -> dict:
