@@ -51,12 +51,23 @@ documents) :
 """
 
 import json
-import os
 import time
 from typing import List, Optional
 
 import anthropic
 
+import cost
+from config import (
+    BATCH_MAX_WAIT_SECONDS,
+    BATCH_POLL_INTERVAL_SECONDS,
+    MAX_RETRIES,
+    MAX_TOKENS_BATCH,
+    MAX_TOKENS_NORMAL,
+    MAX_TOOL_TURNS,
+    MODEL,
+    RETRY_BASE_DELAY_SECONDS,
+    SYSTEM_PROMPT_PATH,
+)
 from tools import (
     GET_POLICY_TOOL_SCHEMA,
     GET_CLAIM_TOOL_SCHEMA,
@@ -79,22 +90,6 @@ from tools import (
 from schema import validate_full
 
 
-_SRC_DIR = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_ROOT = os.path.dirname(_SRC_DIR)
-SYSTEM_PROMPT_PATH = os.path.join(_PROJECT_ROOT, "prompts", "system_prompt.md")
-
-# budget_tokens.md: "Modele par defaut: Claude Haiku 4.5."
-MODEL = "claude-haiku-4-5-20251001"
-
-# Non documente dans les fichiers du projet : garde-fou de securite pour
-# eviter une boucle d'outils infinie. Valeur arbitraire, a ajuster.
-MAX_TOOL_TURNS = 8
-
-# Non documente : nombre de tentatives / delai de base pour le retry sur
-# erreurs API Anthropic (rate limit, erreurs transitoires).
-MAX_RETRIES = 3
-RETRY_BASE_DELAY_SECONDS = 2
-
 TOOL_HANDLERS = {
     "get_policy": handle_get_policy_tool_call,
     "get_claim": handle_get_claim_tool_call,
@@ -105,7 +100,7 @@ TOOL_HANDLERS = {
 
 
 def _load_system_prompt() -> str:
-    with open(SYSTEM_PROMPT_PATH, "r", encoding="utf-8") as f:
+    with SYSTEM_PROMPT_PATH.open("r", encoding="utf-8") as f:
         return f.read()
 
 
@@ -188,12 +183,13 @@ def triage_claim_normal(claim_id: str, client: Optional[anthropic.Anthropic] = N
 
     tool_call_trace = []
     claim_snapshot = None  # rempli des que get_claim est appele, pour la validation finale
+    usage_totals = cost.empty_usage_totals()  # accumule sur tous les tours (budget_tokens.md)
 
     for _turn in range(MAX_TOOL_TURNS):
         with _call_with_retry(
             client.messages.stream,
             model=MODEL,
-            max_tokens=1500,
+            max_tokens=MAX_TOKENS_NORMAL,
             system=_build_cached_system_blocks(),
             tools=_build_cached_tools(),
             messages=messages,
@@ -204,6 +200,7 @@ def triage_claim_normal(claim_id: str, client: Optional[anthropic.Anthropic] = N
                       # message final, recupere ci-dessous.
             final_message = stream.get_final_message()
 
+        usage_totals = cost.accumulate_usage(usage_totals, cost.usage_to_dict(final_message.usage))
         messages.append({"role": "assistant", "content": final_message.content})
 
         tool_use_blocks = [b for b in final_message.content if b.type == "tool_use"]
@@ -212,7 +209,7 @@ def triage_claim_normal(claim_id: str, client: Optional[anthropic.Anthropic] = N
             # Pas d'appel d'outil -> le modele a produit sa reponse finale.
             text_blocks = [b.text for b in final_message.content if b.type == "text"]
             final_text = "\n".join(text_blocks).strip()
-            return _finalize_normal_result(claim_id, final_text, claim_snapshot, tool_call_trace)
+            return _finalize_normal_result(claim_id, final_text, claim_snapshot, tool_call_trace, usage_totals)
 
         # Executer chaque tool_use et rattacher chaque tool_result au bon
         # tool_use_id (SUJET_PROJET.md: "tool_result correctement rattache
@@ -239,10 +236,11 @@ def triage_claim_normal(claim_id: str, client: Optional[anthropic.Anthropic] = N
         "claim_id": claim_id,
         "error": f"Nombre maximal de tours d'outils atteint ({MAX_TOOL_TURNS}) sans reponse finale.",
         "tool_call_trace": tool_call_trace,
+        "usage": usage_totals,
     }
 
 
-def _finalize_normal_result(claim_id, final_text, claim_snapshot, tool_call_trace) -> dict:
+def _finalize_normal_result(claim_id, final_text, claim_snapshot, tool_call_trace, usage_totals) -> dict:
     try:
         parsed = json.loads(final_text)
     except json.JSONDecodeError:
@@ -251,6 +249,7 @@ def _finalize_normal_result(claim_id, final_text, claim_snapshot, tool_call_trac
             "error": "La reponse finale du modele n'est pas un JSON valide.",
             "raw_output": final_text,
             "tool_call_trace": tool_call_trace,
+            "usage": usage_totals,
         }
 
     blessure = bool(claim_snapshot and claim_snapshot.get("blessure") == "oui")
@@ -261,6 +260,7 @@ def _finalize_normal_result(claim_id, final_text, claim_snapshot, tool_call_trac
         "output": parsed,
         "validation_errors": validation_errors,
         "tool_call_trace": tool_call_trace,
+        "usage": usage_totals,
     }
 
 
@@ -331,7 +331,7 @@ def submit_batch_triage(claim_ids: List[str], client: Optional[anthropic.Anthrop
                 "custom_id": claim_id,
                 "params": {
                     "model": MODEL,
-                    "max_tokens": 1000,
+                    "max_tokens": MAX_TOKENS_BATCH,
                     "system": _build_cached_system_blocks(),
                     "messages": [
                         {"role": "user", "content": _build_batch_user_message(context)}
@@ -345,6 +345,37 @@ def submit_batch_triage(claim_ids: List[str], client: Optional[anthropic.Anthrop
 
     batch = _call_with_retry(client.messages.batches.create, requests=requests)
     return batch.id
+
+
+class BatchTimeoutError(RuntimeError):
+    """Levee par wait_for_batch quand un batch job ne se termine pas dans le
+    delai imparti (config.BATCH_MAX_WAIT_SECONDS), plutot que de laisser
+    l'appelant attendre indefiniment un job bloque.
+    """
+
+
+def wait_for_batch(
+    batch_id: str,
+    client: Optional[anthropic.Anthropic] = None,
+    max_wait_seconds: int = BATCH_MAX_WAIT_SECONDS,
+) -> None:
+    """Bloque jusqu'a ce que le batch `batch_id` ait terminé (processing_status
+    == 'ended'), en pollant toutes les BATCH_POLL_INTERVAL_SECONDS. Leve
+    BatchTimeoutError si max_wait_seconds est depasse.
+    """
+    client = client or anthropic.Anthropic()
+    elapsed = 0
+    while True:
+        status = client.messages.batches.retrieve(batch_id).processing_status
+        if status == "ended":
+            return
+        if elapsed >= max_wait_seconds:
+            raise BatchTimeoutError(
+                f"Batch {batch_id!r} toujours '{status}' apres {elapsed}s "
+                f"(max_wait_seconds={max_wait_seconds})."
+            )
+        time.sleep(BATCH_POLL_INTERVAL_SECONDS)
+        elapsed += BATCH_POLL_INTERVAL_SECONDS
 
 
 def retrieve_batch_results(batch_id: str, client: Optional[anthropic.Anthropic] = None) -> List[dict]:
@@ -367,6 +398,7 @@ def retrieve_batch_results(batch_id: str, client: Optional[anthropic.Anthropic] 
             continue
 
         message = entry.result.message
+        usage = cost.usage_to_dict(message.usage)
         text_blocks = [b.text for b in message.content if b.type == "text"]
         final_text = "\n".join(text_blocks).strip()
 
@@ -374,7 +406,12 @@ def retrieve_batch_results(batch_id: str, client: Optional[anthropic.Anthropic] 
             parsed = json.loads(final_text)
         except json.JSONDecodeError:
             results.append(
-                {"claim_id": claim_id, "error": "JSON invalide dans la reponse batch.", "raw_output": final_text}
+                {
+                    "claim_id": claim_id,
+                    "error": "JSON invalide dans la reponse batch.",
+                    "raw_output": final_text,
+                    "usage": usage,
+                }
             )
             continue
 
@@ -387,7 +424,9 @@ def retrieve_batch_results(batch_id: str, client: Optional[anthropic.Anthropic] 
             blessure = False
 
         validation_errors = validate_full(parsed, blessure=blessure)
-        results.append({"claim_id": claim_id, "output": parsed, "validation_errors": validation_errors})
+        results.append(
+            {"claim_id": claim_id, "output": parsed, "validation_errors": validation_errors, "usage": usage}
+        )
 
     return results
 
@@ -413,11 +452,7 @@ def triage(claim_id: str, mode: str = "normal", client: Optional[anthropic.Anthr
     if mode == "batch":
         client = client or anthropic.Anthropic()
         batch_id = submit_batch_triage([claim_id], client=client)
-        while True:
-            status = client.messages.batches.retrieve(batch_id).processing_status
-            if status == "ended":
-                break
-            time.sleep(5)
+        wait_for_batch(batch_id, client=client)
         results = retrieve_batch_results(batch_id, client=client)
         return results[0] if results else {"claim_id": claim_id, "error": "Aucun resultat batch."}
 
