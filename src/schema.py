@@ -221,7 +221,13 @@ def validate_business_rules(output: dict, blessure: bool = False) -> List[str]:
     if "message_client" in output:
         errors.extend(check_no_payment_promise(output["message_client"]))
 
-    if "triage" in output and "fourchette_reparation_tnd" in output and "validation_humaine_requise" in output:
+    fr = output.get("fourchette_reparation_tnd")
+    fr_well_typed = (
+        isinstance(fr, dict)
+        and isinstance(fr.get("min"), int)
+        and isinstance(fr.get("max"), int)
+    )
+    if "triage" in output and fr_well_typed and "validation_humaine_requise" in output:
         expected = expected_validation_humaine_requise(
             output["triage"], output["fourchette_reparation_tnd"], blessure
         )

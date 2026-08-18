@@ -22,16 +22,22 @@ submit_batch_triage/retrieve_batch_results dans agent.py) :
       sinistres a la fois)
 
 Usage:
-    python src/main.py                       # tous les sinistres, mode batch (defaut)
-    python src/main.py --mode normal          # tous les sinistres, mode normal
-    python src/main.py CLM-001                # un seul sinistre, mode batch
-    python src/main.py CLM-001 CLM-002 --mode normal
+    python src/main.py                       # tous les sinistres, mode normal (defaut)
+    python src/main.py --mode batch           # tous les sinistres, mode batch
+    python src/main.py CLM-001                # un seul sinistre, mode normal
+    python src/main.py CLM-001 CLM-002 --mode batch
 """
 
 import argparse
 import json
 import sys
 from typing import List, Optional
+
+# Sortie JSON en UTF-8 quel que soit l'encodage par defaut de la console
+# (ex. cp1252 sur Windows, qui plante des que la reponse du modele contient
+# un caractere hors de son repertoire).
+sys.stdout.reconfigure(encoding="utf-8")
+sys.stderr.reconfigure(encoding="utf-8")
 
 import anthropic
 
@@ -48,7 +54,7 @@ def _run_batch(claim_ids: List[str], client: anthropic.Anthropic) -> List[dict]:
 
 def run(
     claim_ids: Optional[List[str]] = None,
-    mode: str = "batch",
+    mode: str = "normal",
     client: Optional[anthropic.Anthropic] = None,
 ) -> List[dict]:
     """Traite une liste de sinistres (ou tous les sinistres de
@@ -76,11 +82,11 @@ def main():
     parser.add_argument(
         "--mode",
         choices=["batch", "normal"],
-        default="batch",
+        default="normal",
         help=(
             "'normal' (streaming, boucle d'outils synchrone, un appel API par "
             "sinistre) ou 'batch' (tools executes localement, un seul job "
-            "groupe pour tous les sinistres). Defaut: batch."
+            "groupe pour tous les sinistres). Defaut: normal."
         ),
     )
     args = parser.parse_args()
