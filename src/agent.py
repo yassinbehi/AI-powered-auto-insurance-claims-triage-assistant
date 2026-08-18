@@ -51,6 +51,7 @@ documents) :
 """
 
 import json
+import re
 import time
 from typing import List, Optional
 
@@ -65,6 +66,7 @@ from config import (
     MAX_TOKENS_NORMAL,
     MAX_TOOL_TURNS,
     MODEL,
+    REGLES_SINISTRES_FILE,
     RETRY_BASE_DELAY_SECONDS,
     SYSTEM_PROMPT_PATH,
 )
@@ -87,6 +89,7 @@ from tools import (
     PolicyNotFound,
     ClaimNotFound,
 )
+from guard import screen_claim
 from schema import validate_full
 
 
@@ -104,17 +107,45 @@ def _load_system_prompt() -> str:
         return f.read()
 
 
-def _build_cached_system_blocks() -> list:
-    """System prompt en un seul bloc texte, marque cacheable.
+def _load_regles_sinistres() -> str:
+    with REGLES_SINISTRES_FILE.open("r", encoding="utf-8") as f:
+        return f.read()
 
-    Voir note "CACHE DE PROMPT" en tete de fichier.
+
+def _build_cached_system_blocks() -> list:
+    """System prompt + texte integral de regles_sinistres.md, le point de
+    cache etant place sur le DERNIER bloc (ce qui met en cache tout ce qui
+    precede). Voir note "CACHE DE PROMPT" en tete de fichier.
+
+    POURQUOI JOINDRE regles_sinistres.md ICI :
+    budget_tokens.md demande explicitement de "Cacher les regles sinistres".
+    Or le fichier n'etait jusqu'ici jamais envoye au modele (le system prompt
+    se contentait de les reformuler), donc il n'y avait litteralement rien a
+    mettre en cache. Deux consequences corrigees d'un coup :
+      1. le modele dispose maintenant du texte de reference, pas d'une
+         paraphrase (les documents du projet font foi) ;
+      2. le prefixe cacheable passe nettement au-dessus du minimum requis
+         pour que le cache s'active (les modeles Haiku exigent un prefixe
+         d'au moins 2048 tokens ; en dessous, cache_control est ignore en
+         silence et aucun cache n'est cree - ce qui explique les
+         cache_creation_input_tokens / cache_read_input_tokens a 0 observes
+         sur toutes les executions precedentes).
     """
     return [
         {
             "type": "text",
             "text": _load_system_prompt(),
+        },
+        {
+            "type": "text",
+            "text": (
+                "# Texte integral de regles_sinistres.md (source de verite)\n\n"
+                "Ce document fait foi. En cas d'ecart avec une reformulation "
+                "du system prompt, c'est ce texte qui prime.\n\n"
+                + _load_regles_sinistres()
+            ),
             "cache_control": {"type": "ephemeral"},
-        }
+        },
     ]
 
 
@@ -151,6 +182,26 @@ def _call_with_retry(fn, *args, **kwargs):
     raise last_error
 
 
+def _stream_final_message(client: anthropic.Anthropic, **kwargs):
+    """Ouvre le stream, le consomme entierement, et renvoie le message final.
+
+    A APPELER VIA _call_with_retry, jamais l'inverse : `client.messages.stream()`
+    ne declenche AUCUNE requete HTTP, il ne fait que construire un context
+    manager (la requete part dans `__enter__`). Passer `client.messages.stream`
+    directement a _call_with_retry ne protegeait donc rien du tout : la
+    fonction retournait le manager sans qu'aucune exception reseau ne puisse
+    survenir dans la boucle de retry, et les erreurs 429 / 5xx du mode normal
+    n'etaient jamais reessayees (SUJET_PROJET.md: "Gestion erreurs ... statut
+    429 simule"). En encapsulant ici l'ouverture ET la consommation du stream,
+    le retry couvre bien l'appel reseau complet.
+    """
+    with client.messages.stream(**kwargs) as stream:
+        for _event in stream:
+            pass  # le texte est diffuse au client via le stream ; on laisse
+                  # le SDK accumuler le message final, recupere ci-dessous.
+        return stream.get_final_message()
+
+
 def _execute_tool_use_block(block) -> dict:
     handler = TOOL_HANDLERS.get(block.name)
     if handler is None:
@@ -185,20 +236,23 @@ def triage_claim_normal(claim_id: str, client: Optional[anthropic.Anthropic] = N
     claim_snapshot = None  # rempli des que get_claim est appele, pour la validation finale
     usage_totals = cost.empty_usage_totals()  # accumule sur tous les tours (budget_tokens.md)
 
+    # Construits UNE SEULE fois : leur contenu est identique a chaque tour, et
+    # les reconstruire relisait deux fichiers du disque a chaque iteration.
+    # C'est aussi ce qui doit rester strictement identique d'un appel a
+    # l'autre pour que le cache de prompt puisse s'appliquer.
+    system_blocks = _build_cached_system_blocks()
+    cached_tools = _build_cached_tools()
+
     for _turn in range(MAX_TOOL_TURNS):
-        with _call_with_retry(
-            client.messages.stream,
+        final_message = _call_with_retry(
+            _stream_final_message,
+            client,
             model=MODEL,
             max_tokens=MAX_TOKENS_NORMAL,
-            system=_build_cached_system_blocks(),
-            tools=_build_cached_tools(),
+            system=system_blocks,
+            tools=cached_tools,
             messages=messages,
-        ) as stream:
-            for _event in stream:
-                pass  # le texte est deja diffuse au client via le stream ;
-                      # ici on se contente de laisser le SDK accumuler le
-                      # message final, recupere ci-dessous.
-            final_message = stream.get_final_message()
+        )
 
         usage_totals = cost.accumulate_usage(usage_totals, cost.usage_to_dict(final_message.usage))
         messages.append({"role": "assistant", "content": final_message.content})
@@ -240,10 +294,45 @@ def triage_claim_normal(claim_id: str, client: Optional[anthropic.Anthropic] = N
     }
 
 
-def _finalize_normal_result(claim_id, final_text, claim_snapshot, tool_call_trace, usage_totals) -> dict:
+_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+
+
+def _parse_final_json(text: str) -> Optional[dict]:
+    """Extrait et parse le JSON de triage depuis la reponse finale du
+    modele, meme entouree de texte explicatif et/ou de balises markdown
+    (```json ... ```) : malgre la consigne du system prompt de ne
+    produire QUE le JSON brut, le modele y ajoute parfois une analyse ou
+    des balises markdown. Essaie, dans l'ordre : le texte tel quel, le
+    dernier bloc ```json``` trouve, puis le dernier objet {...} du texte.
+    Renvoie None si aucune des trois strategies ne produit de JSON valide."""
+    text = text.strip()
+
     try:
-        parsed = json.loads(final_text)
+        return json.loads(text)
     except json.JSONDecodeError:
+        pass
+
+    fence_matches = _JSON_FENCE_RE.findall(text)
+    if fence_matches:
+        try:
+            return json.loads(fence_matches[-1])
+        except json.JSONDecodeError:
+            pass
+
+    first_brace = text.find("{")
+    last_brace = text.rfind("}")
+    if first_brace != -1 and last_brace > first_brace:
+        try:
+            return json.loads(text[first_brace : last_brace + 1])
+        except json.JSONDecodeError:
+            pass
+
+    return None
+
+
+def _finalize_normal_result(claim_id, final_text, claim_snapshot, tool_call_trace, usage_totals) -> dict:
+    parsed = _parse_final_json(final_text)
+    if parsed is None:
         return {
             "claim_id": claim_id,
             "error": "La reponse finale du modele n'est pas un JSON valide.",
@@ -287,10 +376,17 @@ def _prefetch_context(claim_id: str) -> dict:
 
     coverage = check_coverage(policy, claim)
     repair_band = estimate_repair_band(claim["devis_tnd"])
+
+    # Les signaux de fraude sont calcules sur le claim BRUT : c'est du code
+    # deterministe, insensible a une injection, et il doit voir le texte
+    # d'origine pour que la detection par mots-cles fonctionne.
     fraud_signals = detect_fraud_signals(claim, policy)
 
+    # Le modele, lui, ne recoit QUE la version filtree (src/guard.py).
+    screened_claim = screen_claim(claim)
+
     return {
-        "claim": claim,
+        "claim": screened_claim,
         "policy": policy,
         "coverage": coverage,
         "repair_band": repair_band,
@@ -402,9 +498,8 @@ def retrieve_batch_results(batch_id: str, client: Optional[anthropic.Anthropic] 
         text_blocks = [b.text for b in message.content if b.type == "text"]
         final_text = "\n".join(text_blocks).strip()
 
-        try:
-            parsed = json.loads(final_text)
-        except json.JSONDecodeError:
+        parsed = _parse_final_json(final_text)
+        if parsed is None:
             results.append(
                 {
                     "claim_id": claim_id,

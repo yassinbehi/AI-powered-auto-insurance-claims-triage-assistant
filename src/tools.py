@@ -8,6 +8,7 @@ Implementation of the 5 tools:
 """
 
 import csv
+import json
 import os
 from datetime import date, datetime
 from typing import TypedDict, List, Optional
@@ -242,13 +243,28 @@ GET_CLAIM_TOOL_SCHEMA = {
 
 
 def handle_get_claim_tool_call(tool_input: dict, csv_path: str = DEFAULT_CLAIMS_PATH) -> dict:
+    """Handler du tool get_claim.
+
+    C'est LA frontiere par laquelle les donnees du sinistre atteignent le
+    modele en mode normal : description_client y passe donc par
+    guard.screen_claim (filtre d'injection) avant d'etre renvoye. get_claim
+    lui-meme reste un lecteur CSV pur, sans appel API, pour rester
+    testable hors ligne (tests/test_tools.py).
+    """
     claim_id = tool_input.get("claim_id")
     if not claim_id:
         return {"error": "claim_id manquant."}
     try:
-        return get_claim(claim_id, csv_path=csv_path)
+        claim = get_claim(claim_id, csv_path=csv_path)
     except (ClaimNotFound, FileNotFoundError) as e:
         return {"error": str(e)}
+
+    # Import local : evite un cycle d'import (guard -> config, tools ->
+    # guard) et garde tools.py importable sans dependance API pour les tests
+    # des fonctions deterministes.
+    from guard import screen_claim
+
+    return screen_claim(claim)
 
 
 # =============================================================================
@@ -365,23 +381,74 @@ CHECK_COVERAGE_TOOL_SCHEMA = {
     "input_schema": {
         "type": "object",
         "properties": {
-            "policy": {"type": "object", "description": "Objet renvoye par get_policy."},
-            "claim": {"type": "object", "description": "Objet renvoye par get_claim."},
+            "policy_id": {"type": "string", "description": "Ex: 'POL-002'."},
+            "claim_id": {"type": "string", "description": "Ex: 'CLM-001'."},
         },
-        "required": ["policy", "claim"],
+        "required": ["policy_id", "claim_id"],
     },
 }
 
 
+def _coerce_object(value):
+    """Le modele serialise parfois un objet attendu (policy/claim) en
+    chaine JSON plutot qu'en objet natif dans les arguments d'un tool call.
+    Tente un json.loads() dans ce cas pour rester tolerant a cette derive."""
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return value
+    return value
+
+
+def _resolve_from_input(tool_input: dict, id_key: str, obj_key: str, loader, not_found):
+    """Resout une police ou un sinistre a partir de l'input d'un tool call.
+
+    Forme privilegiee (et la moins couteuse en tokens) : un simple
+    identifiant, que le serveur relit depuis le CSV. La forme historique
+    (objet complet recopie par le modele) reste acceptee pour ne rien casser,
+    mais l'identifiant qu'elle contient est prefere a son contenu : le CSV
+    fait foi, le modele ne peut donc pas fausser le calcul en recopiant
+    approximativement les champs.
+
+    Renvoie (objet, erreur) : l'un des deux vaut toujours None.
+    """
+    identifier = tool_input.get(id_key)
+
+    if not identifier:
+        obj = _coerce_object(tool_input.get(obj_key))
+        if isinstance(obj, dict):
+            identifier = obj.get(id_key)
+            if not identifier:
+                return obj, None  # objet synthetique sans id (tests)
+        elif obj:
+            return None, f"{obj_key} invalide."
+
+    if not identifier:
+        return None, f"{id_key} manquant."
+
+    try:
+        return loader(identifier), None
+    except (not_found, FileNotFoundError) as e:
+        return None, str(e)
+
+
 def handle_check_coverage_tool_call(tool_input: dict) -> dict:
-    policy = tool_input.get("policy")
-    claim = tool_input.get("claim")
-    if not policy or not claim:
-        return {"error": "policy et claim sont tous deux requis."}
+    policy, error = _resolve_from_input(
+        tool_input, "policy_id", "policy", get_policy, PolicyNotFound
+    )
+    if error:
+        return {"error": error}
+    claim, error = _resolve_from_input(
+        tool_input, "claim_id", "claim", get_claim, ClaimNotFound
+    )
+    if error:
+        return {"error": error}
+
     try:
         return check_coverage(policy, claim)
-    except KeyError as e:
-        return {"error": f"Champ manquant dans policy/claim: {e}"}
+    except (KeyError, TypeError, AttributeError) as e:
+        return {"error": f"Champ manquant ou invalide dans policy/claim: {e}"}
 
 
 # =============================================================================
@@ -412,7 +479,7 @@ class RepairBandResult(TypedDict):
     devis_tnd: int
     bande: str
     borne_inf: int
-    borne_sup: Optional[int]
+    borne_sup: int
     expertise_obligatoire: bool
 
 
@@ -423,6 +490,11 @@ def estimate_repair_band(devis_tnd: int) -> RepairBandResult:
     flag expertise_obligatoire qui, lui, reflete directement la regle
     documentee "Devis > 5000 TND: expertise obligatoire." de
     regles_sinistres.md.
+
+    borne_sup est toujours un entier (jamais None) : contrat_sortie.md
+    exige fourchette_reparation_tnd = {"min": int, "max": int}. Pour la
+    derniere bande (illimitee), on utilise devis_tnd lui-meme comme borne
+    haute plutot que de laisser filtrer un None jusqu'a la sortie finale.
     """
     if devis_tnd < 0:
         raise ValueError("devis_tnd ne peut pas etre negatif.")
@@ -434,7 +506,7 @@ def estimate_repair_band(devis_tnd: int) -> RepairBandResult:
                     "devis_tnd": devis_tnd,
                     "bande": label,
                     "borne_inf": borne_inf,
-                    "borne_sup": borne_sup,
+                    "borne_sup": borne_sup if borne_sup is not None else devis_tnd,
                     "expertise_obligatoire": devis_tnd > EXPERTISE_THRESHOLD_TND,
                 }
     # Ne devrait pas arriver (REPAIR_BANDS couvre [0, +inf)).
@@ -509,9 +581,54 @@ def handle_estimate_repair_band_tool_call(tool_input: dict) -> dict:
 #     date du sinistre). Interpretation la plus factuelle possible, mais
 #     reste une interpretation puisque le terme n'est pas defini dans les
 #     documents.
+#
+# (C) Ajoute a la demande explicite de l'utilisateur (revue post-run du
+#     18/08/2026) : un pattern narratif "achat recent d'un bien de valeur
+#     suivi peu apres d'une declaration de perte/vol" dans
+#     description_client (ex: CLM-007 "Vol declare 2 jours apres achat de
+#     pieces couteuses"). Implemente en PUR CODE DETERMINISTE (simple
+#     correspondance de mots-cles, meme esprit que PAYMENT_PROMISE_KEYWORDS
+#     dans schema.py) : le modele ne relit et n'interprete JAMAIS lui-meme
+#     description_client pour en deduire un signal de fraude, afin de ne
+#     jamais faire dependre une decision de triage d'une lecture/jugement du
+#     modele sur du texte client non fiable (section 1 de system_prompt.md,
+#     risque d'injection). Liste de mots-cles NON EXHAUSTIVE, a ajuster
+#     librement.
 
 POLICY_RECENT_DAYS = 30  # NON DOCUMENTE - a valider avec l'utilisateur
 MONTANT_ELEVE_THRESHOLD_TND = EXPERTISE_REQUIRED_THRESHOLD_TND  # reutilise le seuil regles_sinistres.md
+
+# Signaux remontes a titre INFORMATIF mais qui ne comptent PAS dans la
+# "combinaison" de regles_sinistres.md ("Signal fraude si combinaison de:
+# ...").
+#
+# INTERPRETATION EXPLICITE de "incoherence police" : ce module l'avait
+# d'abord traduit par "date_sinistre hors de la periode [date_debut,
+# date_fin]", c'est-a-dire une police expiree ou pas encore active. A
+# l'usage, c'est un fait ADMINISTRATIF (police echue), deja porte par
+# check_coverage et par les dates elles-memes, et non un indice d'intention
+# frauduleuse : une police expiree de 3 jours (CLM-001) ou de plusieurs mois
+# (CLM-003) releve du dossier a regulariser, pas de la fraude. Le compter
+# comme facteur de fraude faisait basculer ces dossiers en
+# `suspicion_fraude` a tort.
+#
+# Une "incoherence police" au sens de regles_sinistres.md serait plutot une
+# CONTRADICTION entre la declaration et la police (vehicule, conducteur,
+# usage declare...), non calculable avec les colonnes actuelles. Le signal
+# de date reste donc remonte dans signaux_fraude (il doit rester visible),
+# mais il est exclu du decompte de la combinaison.
+NON_COUNTING_FRAUD_SIGNALS = {"incoherence_police_date_hors_couverture"}
+
+# Nombre de signaux distincts requis pour parler de "combinaison"
+# (regles_sinistres.md n'en chiffre pas le seuil : 2 est la lecture minimale
+# du mot "combinaison").
+FRAUD_COMBINATION_THRESHOLD = 2
+
+SUSPICIOUS_PURCHASE_KEYWORDS = ["achat", "achete", "achetee", "acquis", "acquisition"]
+SUSPICIOUS_SHORT_DELAY_KEYWORDS = [
+    "jour apres", "jours apres", "lendemain", "quelques jours",
+    "jour suivant", "jours suivant",
+]
 
 # Pieces obligatoires structurees disponibles (constat, photos) par type de
 # sinistre, d'apres regles_sinistres.md "Pieces obligatoires". Seuls les
@@ -521,6 +638,49 @@ STRUCTURED_REQUIRED_PIECES = {
     "collision": ["constat", "photos"],  # + devis, deja garanti (devis_tnd toujours present)
     "bris_glace": ["photos"],  # + devis, deja garanti
 }
+
+# Pieces "recommandees" NON BLOQUANTES pour les types de sinistre non
+# couverts par la liste "Pieces obligatoires" documentee dans
+# regles_sinistres.md (ex: rc_tiers, absent de cette liste). Ajoute a la
+# demande explicite de l'utilisateur : calcul 100% deterministe a partir des
+# colonnes structurees du CSV (jamais de description_client), pour rester
+# fiable et insensible a une eventuelle tentative d'injection dans le texte
+# client. A afficher a titre informatif dans la sortie finale, jamais pour
+# declencher le triage `pieces_manquantes` (reserve aux types documentes).
+NON_BLOCKING_RECOMMENDED_PIECES = {
+    "rc_tiers": ["photos"],
+}
+
+# Vocabulaire canonique des pieces obligatoires, transcrit LITTERALEMENT de
+# regles_sinistres.md, section "Pieces obligatoires" :
+#   - Collision: constat, photos, devis.
+#   - Vol: depot de plainte, carte grise, cles, declaration circonstanciee.
+#   - Incendie: photos, rapport remorquage, expertise obligatoire.
+#   - Bris de glace: photos et devis.
+# Expose au modele pour qu'il reprenne ces libelles exacts au lieu d'en
+# inventer une liste partielle (le run du 18/08/2026 ne listait que 2 des 4
+# pieces attendues pour un vol). La plupart de ces pieces ne sont PAS des
+# colonnes de claims_auto.csv : le code ne peut donc pas decider seul
+# lesquelles sont fournies, il fournit la liste de reference.
+DOCUMENTED_REQUIRED_PIECES = {
+    "collision": ["constat", "photos", "devis"],
+    "vol": ["depot_plainte", "carte_grise", "cles", "declaration_circonstanciee"],
+    "incendie": ["photos", "rapport_remorquage"],
+    "bris_glace": ["photos", "devis"],
+}
+
+
+def _has_recent_purchase_then_loss_pattern(description_client: str) -> bool:
+    """Detection deterministe par mots-cles (voir note (C) ci-dessus).
+
+    Ne fait AUCUNE interpretation semantique du texte : simple
+    correspondance de sous-chaines, insensible a toute instruction que le
+    texte client pourrait contenir.
+    """
+    text = (description_client or "").lower()
+    has_purchase = any(kw in text for kw in SUSPICIOUS_PURCHASE_KEYWORDS)
+    has_short_delay = any(kw in text for kw in SUSPICIOUS_SHORT_DELAY_KEYWORDS)
+    return has_purchase and has_short_delay
 
 
 def _parse_date(value: str) -> Optional[date]:
@@ -590,6 +750,14 @@ def detect_fraud_signals(claim: dict, policy: dict) -> FraudSignalsResult:
     if devis_tnd > MONTANT_ELEVE_THRESHOLD_TND:
         signaux.append("montant_eleve")
 
+    # --- (C) pattern narratif "achat recent suivi d'une perte declaree" ---
+    # Calcule ici, en code, et NON laisse a l'appreciation du modele : une
+    # decision de triage ne doit jamais dependre de la lecture d'un texte
+    # client par le modele (le texte passe par src/guard.py avant d'atteindre
+    # le modele, mais la detection de fraude, elle, reste deterministe).
+    if _has_recent_purchase_then_loss_pattern(claim.get("description_client", "")):
+        signaux.append("achat_recent_suivi_perte_declaree")
+
     # --- (A) pieces insuffisantes (uniquement types evaluables) -----------
     type_sinistre = claim["type_sinistre"]
     if type_sinistre in STRUCTURED_REQUIRED_PIECES:
@@ -605,6 +773,28 @@ def detect_fraud_signals(claim: dict, policy: dict) -> FraudSignalsResult:
             f"pieces_insuffisantes (type '{type_sinistre}': pieces obligatoires "
             "documentees non couvertes par les colonnes structurees du CSV)"
         )
+
+    # --- Liste de reference des pieces obligatoires documentees -----------
+    # Transmise pour que le modele reprenne les libelles exacts de
+    # regles_sinistres.md. Vide pour un type absent de la section "Pieces
+    # obligatoires" (ex: rc_tiers) -> ce type ne peut pas declencher le
+    # triage bloquant `pieces_manquantes`.
+    details["pieces_obligatoires_documentees"] = DOCUMENTED_REQUIRED_PIECES.get(type_sinistre, [])
+    details["type_a_pieces_obligatoires_documentees"] = type_sinistre in DOCUMENTED_REQUIRED_PIECES
+
+    # --- Conclusion "combinaison" calculee ICI, pas par le modele ---------
+    # Le modele ne compte rien et n'arbitre rien : il lit un booleen. Voir
+    # NON_COUNTING_FRAUD_SIGNALS pour les signaux exclus du decompte.
+    signaux_comptants = [s for s in signaux if s not in NON_COUNTING_FRAUD_SIGNALS]
+    details["signaux_comptant_pour_combinaison"] = signaux_comptants
+    details["combinaison_fraude_atteinte"] = len(signaux_comptants) >= FRAUD_COMBINATION_THRESHOLD
+
+    # --- pieces recommandees non bloquantes (types hors liste documentee) -
+    if type_sinistre in NON_BLOCKING_RECOMMENDED_PIECES:
+        details["pieces_recommandees_non_bloquantes"] = [
+            piece for piece in NON_BLOCKING_RECOMMENDED_PIECES[type_sinistre]
+            if claim.get(piece, "non") != "oui"
+        ]
 
     return {
         "claim_id": claim["claim_id"],
@@ -629,23 +819,42 @@ DETECT_FRAUD_SIGNALS_TOOL_SCHEMA = {
     "input_schema": {
         "type": "object",
         "properties": {
-            "claim": {"type": "object", "description": "Objet renvoye par get_claim."},
-            "policy": {"type": "object", "description": "Objet renvoye par get_policy."},
+            "claim_id": {"type": "string", "description": "Ex: 'CLM-001'."},
+            "policy_id": {"type": "string", "description": "Ex: 'POL-002'."},
         },
-        "required": ["claim", "policy"],
+        "required": ["claim_id", "policy_id"],
     },
 }
 
 
 def handle_detect_fraud_signals_tool_call(tool_input: dict) -> dict:
-    claim = tool_input.get("claim")
-    policy = tool_input.get("policy")
-    if not claim or not policy:
-        return {"error": "claim et policy sont tous deux requis."}
+    """Handler du tool detect_fraud_signals.
+
+    DURCISSEMENT : quand le claim/policy fourni par le modele porte un
+    identifiant connu, on RE-LIT la version autoritative depuis les CSV au
+    lieu de faire confiance a l'objet transmis. Deux raisons :
+      1. le modele ne peut pas fausser la detection de fraude en modifiant
+         (volontairement ou par recopie approximative) les champs qu'il
+         repasse au tool ;
+      2. description_client a ete filtre par guard.py avant d'atteindre le
+         modele ; la detection par mots-cles doit, elle, s'appliquer au
+         texte d'origine.
+    """
+    claim, error = _resolve_from_input(
+        tool_input, "claim_id", "claim", get_claim, ClaimNotFound
+    )
+    if error:
+        return {"error": error}
+    policy, error = _resolve_from_input(
+        tool_input, "policy_id", "policy", get_policy, PolicyNotFound
+    )
+    if error:
+        return {"error": error}
+
     try:
         return detect_fraud_signals(claim, policy)
-    except KeyError as e:
-        return {"error": f"Champ manquant dans claim/policy: {e}"}
+    except (KeyError, TypeError, AttributeError) as e:
+        return {"error": f"Champ manquant ou invalide dans claim/policy: {e}"}
 
 
 if __name__ == "__main__":
