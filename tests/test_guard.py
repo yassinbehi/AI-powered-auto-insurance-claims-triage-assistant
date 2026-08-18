@@ -43,6 +43,14 @@ class _FakeMessage:
     def __init__(self, text):
         block = type("Block", (), {"type": "text", "text": text})()
         self.content = [block]
+        # Le classifieur remonte son usage pour le rapport de cout : le faux
+        # message doit donc exposer le meme champ que le SDK.
+        self.usage = {
+            "input_tokens": 300,
+            "output_tokens": 5,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+        }
 
 
 class _FakeMessages:
@@ -67,8 +75,10 @@ class _FakeClient:
 @pytest.fixture(autouse=True)
 def _clear_cache():
     guard.reset_screening_cache()
+    guard.reset_guard_usage()
     yield
     guard.reset_screening_cache()
+    guard.reset_guard_usage()
 
 
 # =============================================================================
@@ -168,6 +178,32 @@ class TestClassifieur:
         client = _FakeClient("Verdict: SAFE.")
         result = classify_client_text("texte quelconque", client=client)
         assert result["verdict"] == VERDICT_SAFE
+
+
+class TestSuiviDuCout:
+    """Les appels du classifieur doivent apparaitre dans le rapport de cout
+    (budget_tokens.md) : ils ne passent pas par agent.py."""
+
+    def test_usage_du_classifieur_est_comptabilise(self):
+        guard.reset_guard_usage()
+        classify_client_text("texte neutre a examiner", client=_FakeClient("SAFE"))
+        total = guard.get_guard_usage_total()
+        assert total["input_tokens"] == 300
+        assert total["output_tokens"] == 5
+
+    def test_usage_cumule_sur_plusieurs_appels(self):
+        guard.reset_guard_usage()
+        client = _FakeClient("SAFE")
+        classify_client_text("premier texte", client=client)
+        classify_client_text("deuxieme texte", client=client)
+        assert guard.get_guard_usage_total()["input_tokens"] == 600
+
+    def test_aucun_usage_quand_le_screen_deterministe_suffit(self):
+        # CLM-002 est arrete par la couche [1] : aucun appel API, donc
+        # aucun token facture.
+        guard.reset_guard_usage()
+        classify_client_text(TEXTE_CLM_002, client=_FakeClient("SAFE"))
+        assert guard.get_guard_usage_total()["input_tokens"] == 0
 
 
 # =============================================================================

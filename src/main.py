@@ -43,6 +43,7 @@ import anthropic
 
 import agent
 import cost
+import guard
 from tools import list_claim_ids
 
 
@@ -101,10 +102,19 @@ def main():
     for r in results:
         if "usage" in r:
             usage_totals = cost.accumulate_usage(usage_totals, r["usage"])
+
+    # Les appels du filtre anti-injection (src/guard.py) ne passent pas par
+    # agent.py : sans cette ligne ils seraient absents du total et le cout
+    # affiche serait sous-estime (budget_tokens.md).
+    guard_usage = guard.get_guard_usage_total()
+    usage_totals = cost.accumulate_usage(usage_totals, guard_usage)
+
     report = cost.format_cost_report(usage_totals)
+    guard_cost = cost.calculate_cost_usd(guard_usage)
     print(
         f"\n[cost] ${report['cost_usd']:.4f} "
-        f"(plafond {report['budget_ceiling_usd']} USD, "
+        f"(dont ${guard_cost:.4f} de filtrage anti-injection ; "
+        f"plafond {report['budget_ceiling_usd']} USD, "
         f"cible {report['budget_target_min_usd']}-{report['budget_target_max_usd']} USD)",
         file=sys.stderr,
     )
