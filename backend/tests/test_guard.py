@@ -241,3 +241,59 @@ class TestScreenClaim:
         screen_claim(claim, client=client)
         screen_claim(claim, client=client)
         assert client.messages.calls == 1, "le memo doit eviter les appels repetes"
+
+
+# =============================================================================
+# Mode sans classifieur (couches [1] et [3] seules)
+# =============================================================================
+
+class TestSansClassifieur:
+    """use_classifier=False sert aux consultations en lecture seule (fiche
+    dossier de l'API HTTP) : aucun appel de modele, donc aucun cout."""
+
+    def _claim(self, description):
+        return {"claim_id": "CLM-TEST", "description_client": description}
+
+    def test_aucun_appel_de_modele(self):
+        client = _FakeClient("SAFE")
+        classify_client_text(TEXTE_CLM_001, client=client, use_classifier=False)
+        assert client.messages.calls == 0
+
+    def test_absence_de_verdict_plutot_qu_un_safe_fabrique(self):
+        # Point central : sans la couche [2], rien n'atteste que le texte est
+        # sain. Renvoyer SAFE afficherait une garantie que le filtre n'a pas
+        # produite.
+        result = classify_client_text(TEXTE_CLM_001, client=None, use_classifier=False)
+        assert result["verdict"] is None
+        assert result["classifier_called"] is False
+
+    def test_le_texte_reste_assaini_et_encadre(self):
+        result = classify_client_text(TEXTE_CLM_001, use_classifier=False)
+        assert result["text_for_model"] == wrap_untrusted(TEXTE_CLM_001)
+
+    def test_la_couche_1_tranche_toujours_seule(self):
+        # Un marqueur connu suffit : le verdict reste ferme meme sans
+        # classifieur, et le texte est retire.
+        result = classify_client_text(TEXTE_CLM_002, use_classifier=False)
+        assert result["verdict"] == VERDICT_INJECTION
+        assert result["text_for_model"] == REDACTED_PLACEHOLDER
+
+    def test_le_memo_n_est_pas_pollue_par_une_consultation(self):
+        """Une consultation gratuite ne doit pas priver le triage suivant de
+        la couche [2] : sinon un simple affichage de fiche desactiverait le
+        filtre pour le reste de la session."""
+        claim = self._claim(TEXTE_CLM_001)
+        screen_claim(claim, use_classifier=False)
+
+        client = _FakeClient("SAFE")
+        screened = screen_claim(claim, client=client)
+        assert client.messages.calls == 1, "la couche [2] doit s'executer ensuite"
+        assert screened["_screening"]["verdict"] == VERDICT_SAFE
+
+    def test_un_screening_complet_reste_reutilise(self):
+        # Dans l'autre sens, un verdict complet deja calcule est reutilise
+        # meme par un appelant qui se contentait des couches deterministes.
+        claim = self._claim(TEXTE_CLM_001)
+        screen_claim(claim, client=_FakeClient("SAFE"))
+        screened = screen_claim(claim, use_classifier=False)
+        assert screened["_screening"]["verdict"] == VERDICT_SAFE

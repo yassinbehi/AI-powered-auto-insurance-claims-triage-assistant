@@ -175,7 +175,27 @@ def _call_with_retry(fn, *args, **kwargs):
     raise last_error
 
 
-def _stream_final_message(client: anthropic.Anthropic, **kwargs):
+def _emit(on_event, event_type: str, **payload) -> None:
+    """Transmet un evenement d'avancement a l'observateur, s'il y en a un.
+
+    `on_event` est optionnel et vaut None partout ailleurs dans le projet
+    (CLI, evals) : la boucle de triage fonctionne exactement comme avant sans
+    observateur. Il sert a l'API HTTP (src/api.py), qui a besoin de voir la
+    progression en direct pour la diffuser en SSE.
+
+    Les exceptions de l'observateur sont avalees VOLONTAIREMENT : un client
+    HTTP qui se deconnecte au milieu d'un triage ne doit pas faire echouer un
+    appel de modele deja paye et deja en cours.
+    """
+    if on_event is None:
+        return
+    try:
+        on_event({"type": event_type, **payload})
+    except Exception:  # noqa: BLE001 - voir docstring
+        pass
+
+
+def _stream_final_message(client: anthropic.Anthropic, on_event=None, **kwargs):
     """Ouvre le stream, le consomme entierement, et renvoie le message final.
 
     A APPELER VIA _call_with_retry, jamais l'inverse : `client.messages.stream()`
@@ -189,9 +209,18 @@ def _stream_final_message(client: anthropic.Anthropic, **kwargs):
     le retry couvre bien l'appel reseau complet.
     """
     with client.messages.stream(**kwargs) as stream:
-        for _event in stream:
-            pass  # le texte est diffuse au client via le stream ; on laisse
-                  # le SDK accumuler le message final, recupere ci-dessous.
+        for event in stream:
+            # On n'ecoute que les evenements bruts de l'API (content_block_delta)
+            # et pas les evenements de commodite du SDK (type "text"), qui
+            # portent la MEME donnee : ecouter les deux dupliquerait chaque
+            # fragment. Les evenements bruts sont aussi le contrat le plus
+            # stable d'une version du SDK a l'autre.
+            if getattr(event, "type", None) != "content_block_delta":
+                continue
+            delta = getattr(event, "delta", None)
+            if getattr(delta, "type", None) == "text_delta":
+                _emit(on_event, "text_delta", text=delta.text)
+        # Le SDK a accumule le message final pendant l'iteration ci-dessus.
         return stream.get_final_message()
 
 
@@ -206,13 +235,21 @@ def _execute_tool_use_block(block) -> dict:
 # Mode "normal" : boucle agentique synchrone, en streaming.
 # =============================================================================
 
-def triage_claim(claim_id: str, client: Optional[anthropic.Anthropic] = None) -> dict:
+def triage_claim(
+    claim_id: str,
+    client: Optional[anthropic.Anthropic] = None,
+    on_event=None,
+) -> dict:
     """Triage d'un seul sinistre en mode normal (streaming, boucle d'outils
     synchrone). Retourne un dict avec le JSON de triage (si produit et
     valide), les erreurs de validation eventuelles, et l'historique des
     tool calls pour tracabilite (SUJET_PROJET.md: "traces par etape").
+
+    `on_event` (optionnel) recoit la progression au fil de l'eau : voir _emit.
+    La valeur de retour est identique avec ou sans observateur.
     """
     client = client or anthropic.Anthropic()
+    _emit(on_event, "run_started", claim_id=claim_id, model=MODEL)
 
     messages = [
         {
@@ -236,10 +273,14 @@ def triage_claim(claim_id: str, client: Optional[anthropic.Anthropic] = None) ->
     system_blocks = _build_cached_system_blocks()
     cached_tools = _build_cached_tools()
 
-    for _turn in range(MAX_TOOL_TURNS):
+    for turn_index in range(MAX_TOOL_TURNS):
+        turn = turn_index + 1
+        _emit(on_event, "turn_started", turn=turn)
+
         final_message = _call_with_retry(
             _stream_final_message,
             client,
+            on_event=on_event,
             model=MODEL,
             max_tokens=MAX_TOKENS,
             system=system_blocks,
@@ -247,7 +288,8 @@ def triage_claim(claim_id: str, client: Optional[anthropic.Anthropic] = None) ->
             messages=messages,
         )
 
-        usage_totals = cost.accumulate_usage(usage_totals, cost.usage_to_dict(final_message.usage))
+        turn_usage = cost.usage_to_dict(final_message.usage)
+        usage_totals = cost.accumulate_usage(usage_totals, turn_usage)
         messages.append({"role": "assistant", "content": final_message.content})
 
         tool_use_blocks = [b for b in final_message.content if b.type == "tool_use"]
@@ -256,15 +298,23 @@ def triage_claim(claim_id: str, client: Optional[anthropic.Anthropic] = None) ->
             # Pas d'appel d'outil -> le modele a produit sa reponse finale.
             text_blocks = [b.text for b in final_message.content if b.type == "text"]
             final_text = "\n".join(text_blocks).strip()
-            return _finalize_result(claim_id, final_text, claim_snapshot, tool_call_trace, usage_totals)
+            _emit(on_event, "turn_completed", turn=turn, usage=turn_usage)
+            return _finalize_result(
+                claim_id, final_text, claim_snapshot, tool_call_trace, usage_totals,
+                on_event=on_event,
+            )
 
         # Executer chaque tool_use et rattacher chaque tool_result au bon
         # tool_use_id (SUJET_PROJET.md: "tool_result correctement rattache
         # au tool_use").
         tool_results = []
         for block in tool_use_blocks:
+            _emit(on_event, "tool_use", turn=turn, tool=block.name, input=block.input)
+
             result = _execute_tool_use_block(block)
             tool_call_trace.append({"tool": block.name, "input": block.input, "output": result})
+
+            _emit(on_event, "tool_result", turn=turn, tool=block.name, output=result)
 
             if block.name == "get_claim" and "error" not in result:
                 claim_snapshot = result
@@ -278,13 +328,16 @@ def triage_claim(claim_id: str, client: Optional[anthropic.Anthropic] = None) ->
             )
 
         messages.append({"role": "user", "content": tool_results})
+        _emit(on_event, "turn_completed", turn=turn, usage=turn_usage)
 
-    return {
+    result = {
         "claim_id": claim_id,
         "error": f"Nombre maximal de tours d'outils atteint ({MAX_TOOL_TURNS}) sans reponse finale.",
         "tool_call_trace": tool_call_trace,
         "usage": usage_totals,
     }
+    _emit(on_event, "error", message=result["error"])
+    return result
 
 
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
@@ -323,34 +376,48 @@ def _parse_final_json(text: str) -> Optional[dict]:
     return None
 
 
-def _finalize_result(claim_id, final_text, claim_snapshot, tool_call_trace, usage_totals) -> dict:
+def _finalize_result(
+    claim_id, final_text, claim_snapshot, tool_call_trace, usage_totals, on_event=None
+) -> dict:
     parsed = _parse_final_json(final_text)
     if parsed is None:
-        return {
+        result = {
             "claim_id": claim_id,
             "error": "La reponse finale du modele n'est pas un JSON valide.",
             "raw_output": final_text,
             "tool_call_trace": tool_call_trace,
             "usage": usage_totals,
         }
+        _emit(on_event, "error", message=result["error"], raw_output=final_text)
+        return result
 
     blessure = bool(claim_snapshot and claim_snapshot.get("blessure") == "oui")
     validation_errors = validate_full(parsed, blessure=blessure)
 
-    return {
+    result = {
         "claim_id": claim_id,
         "output": parsed,
         "validation_errors": validation_errors,
         "tool_call_trace": tool_call_trace,
         "usage": usage_totals,
     }
+    _emit(
+        on_event,
+        "result",
+        claim_id=claim_id,
+        output=parsed,
+        validation_errors=validation_errors,
+        tool_call_trace=tool_call_trace,
+        usage=usage_totals,
+    )
+    return result
 
 
 # =============================================================================
 # Pre-calcul deterministe du contexte d'un sinistre.
 # =============================================================================
 
-def _prefetch_context(claim_id: str) -> dict:
+def build_context(claim_id: str, use_classifier: bool = True) -> dict:
     """Execute localement les 5 tools pour un sinistre, sans passer par le
     modele (ils sont deterministes). Renvoie soit le contexte complet, soit
     une erreur si le claim/policy est introuvable.
@@ -358,8 +425,12 @@ def _prefetch_context(claim_id: str) -> dict:
     N'est PAS utilise par la boucle de triage (le modele appelle les tools
     lui-meme, c'est tout l'interet du mode agentique). Cette fonction sert a
     evals/run_evals.py, qui a besoin des resultats de reference des tools
-    pour grader certains checks, et a toute inspection hors ligne d'un
-    dossier. Aucun appel API.
+    pour grader certains checks, a l'API HTTP (fiche dossier), et a toute
+    inspection hors ligne d'un dossier.
+
+    use_classifier=False rend la fonction entierement gratuite : c'est alors
+    la seule facon d'obtenir le dossier complet sans aucun appel de modele
+    (voir guard.screen_claim). Le verdict de screening vaut alors None.
     """
     try:
         claim = get_claim(claim_id)
@@ -380,7 +451,7 @@ def _prefetch_context(claim_id: str) -> dict:
     fraud_signals = detect_fraud_signals(claim, policy)
 
     # Le modele, lui, ne recoit QUE la version filtree (src/guard.py).
-    screened_claim = screen_claim(claim)
+    screened_claim = screen_claim(claim, use_classifier=use_classifier)
 
     return {
         "claim": screened_claim,
@@ -391,15 +462,23 @@ def _prefetch_context(claim_id: str) -> dict:
     }
 
 
+# Ancien nom, conserve pour evals/run_evals.py et les appelants existants.
+_prefetch_context = build_context
+
+
 # =============================================================================
 # Point d'entree unique.
 # =============================================================================
 
-def triage(claim_id: str, client: Optional[anthropic.Anthropic] = None) -> dict:
+def triage(
+    claim_id: str,
+    client: Optional[anthropic.Anthropic] = None,
+    on_event=None,
+) -> dict:
     """Point d'entree pour un triage a l'unite : streaming, boucle d'outils
     synchrone. Alias de triage_claim, conserve comme nom d'API stable
     pour les appelants."""
-    return triage_claim(claim_id, client=client)
+    return triage_claim(claim_id, client=client, on_event=on_event)
 
 
 if __name__ == "__main__":

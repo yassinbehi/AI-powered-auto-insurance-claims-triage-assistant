@@ -1,0 +1,223 @@
+"""
+src/api_models.py
+
+Contrat de reponse de l'API HTTP (src/api.py). Ces modeles refletent les
+TypedDict deja definis dans le domaine :
+
+    tools.Policy, tools.Claim, tools.CoverageResult,
+    tools.RepairBandResult, tools.FraudSignalsResult,
+    schema.TriageOutput (contrat_sortie.md)
+
+Ils ne sont PAS une seconde source de verite metier : aucune regle, aucun
+seuil, aucune valeur d'enum metier n'est redefinie ici. Leur seul role est de
+figer la forme de ce qui sort par HTTP, et de servir de reference au frontend.
+
+DEUX CHOIX EXPLICITES :
+
+1. `TriageResult.output` est un dict libre, PAS un modele valide.
+   La sortie du modele peut etre malformee - c'est precisement ce que
+   schema.validate_full mesure et ce que `validation_errors` rapporte. Un
+   modele de reponse strict rejetterait la reponse HTTP entiere en cas de
+   sortie invalide, c'est-a-dire masquerait exactement les echecs que le
+   projet cherche a rendre visibles. La sortie est donc transmise telle
+   quelle, accompagnee de ses erreurs de validation.
+
+2. `Screening` n'expose JAMAIS `original_text`.
+   guard.classify_client_text conserve le texte client d'origine pour l'audit,
+   mais il ne franchit pas la frontiere HTTP : seul `text_for_model` sort,
+   c'est-a-dire exactement ce que le modele de triage a recu (assaini et
+   encadre, ou remplace par le placeholder si le verdict est INJECTION).
+"""
+
+from typing import Any, Literal, Optional
+
+from pydantic import BaseModel, Field
+
+
+# =============================================================================
+# Referentiel (lecture seule, aucun appel de modele)
+# =============================================================================
+
+class Policy(BaseModel):
+    """Miroir de tools.Policy."""
+
+    policy_id: str
+    assure: str
+    vehicule: str
+    formule: str
+    date_debut: str
+    date_fin: str
+    franchise_tnd: int
+    garanties: list[str]
+    exclusions: list[str]
+
+
+class Claim(BaseModel):
+    """Miroir de tools.Claim.
+
+    `description_client` porte ici la version SCREENEE (assainie et encadree,
+    ou redigee), jamais le texte brut : cette API expose ce que le modele
+    voit, pas ce que le client a ecrit.
+
+    Les colonnes de reference `priorite_attendue` / `triage_attendu` de
+    claims_auto.csv sont absentes de ce modele, comme elles le sont deja de
+    tools.get_claim. Elles ne doivent jamais sortir par HTTP.
+    """
+
+    claim_id: str
+    policy_id: str
+    date_sinistre: str
+    type_sinistre: str
+    description_client: str
+    blessure: str
+    constat: str
+    photos: str
+    devis_tnd: int
+    tiers_identifie: str
+    kilometrage_declare: int
+
+
+class Screening(BaseModel):
+    """Trace du filtre anti-injection (src/guard.py).
+
+    `verdict` vaut None quand la couche [2] (classifieur LLM) n'a pas ete
+    executee - cas de la consultation gratuite. C'est une absence de verdict,
+    pas un verdict favorable : l'interface doit l'afficher comme telle et ne
+    jamais la presenter comme un SAFE.
+    """
+
+    verdict: Optional[Literal["SAFE", "SUSPECT", "INJECTION"]] = None
+    markers_found: list[str] = Field(default_factory=list)
+    classifier_available: bool = True
+    classifier_called: bool = False
+    text_for_model: str = ""
+    redacted: bool = False
+
+
+class CoverageResult(BaseModel):
+    """Miroir de tools.CoverageResult."""
+
+    policy_id: str
+    claim_id: str
+    type_sinistre: str
+    garantie_recherchee: str
+    formule: str
+    garantie_applicable: bool
+    raison: str
+    verification_humaine_recommandee: bool
+
+
+class RepairBandResult(BaseModel):
+    """Miroir de tools.RepairBandResult."""
+
+    devis_tnd: int
+    bande: str
+    borne_inf: int
+    borne_sup: int
+    expertise_obligatoire: bool
+
+
+class FraudSignalsResult(BaseModel):
+    """Miroir de tools.FraudSignalsResult.
+
+    `details` reste un dict libre : ses cles varient selon le type de sinistre
+    et les donnees disponibles (voir tools.detect_fraud_signals).
+    """
+
+    claim_id: str
+    policy_id: str
+    signaux_fraude: list[str] = Field(default_factory=list)
+    signaux_non_evaluables: list[str] = Field(default_factory=list)
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class ClaimSummary(BaseModel):
+    """Ligne de la file d'attente.
+
+    Ne contient PAS `description_client` : la file n'a pas besoin du texte
+    client, et ne pas l'y faire figurer evite d'exposer du contenu non fiable
+    hors du composant qui sait le mettre en quarantaine. Le drapeau
+    `injection_markers_found` suffit a signaler le dossier.
+    """
+
+    claim_id: str
+    policy_id: str
+    date_sinistre: str
+    type_sinistre: str
+    blessure: str
+    devis_tnd: int
+    tiers_identifie: str
+    assure: Optional[str] = None
+    vehicule: Optional[str] = None
+    formule: Optional[str] = None
+    injection_markers_found: list[str] = Field(default_factory=list)
+
+
+class ClaimDetail(BaseModel):
+    """Fiche dossier complete : les 5 tools deroules de facon deterministe,
+    sans aucun appel de modele (voir agent.build_context)."""
+
+    claim: Claim
+    policy: Policy
+    coverage: CoverageResult
+    repair_band: RepairBandResult
+    fraud_signals: FraudSignalsResult
+    screening: Screening
+
+
+# =============================================================================
+# Triage (appels de modele)
+# =============================================================================
+
+class ToolCall(BaseModel):
+    """Une entree de `tool_call_trace` (SUJET_PROJET.md: "traces par etape")."""
+
+    tool: str
+    input: dict[str, Any] = Field(default_factory=dict)
+    output: dict[str, Any] = Field(default_factory=dict)
+
+
+class TriageResult(BaseModel):
+    """Retour de agent.triage_claim, transmis tel quel.
+
+    Les trois formes possibles cohabitent dans un seul modele, car elles se
+    distinguent par la presence de champs et non par un discriminant :
+
+      - succes            : `output` renseigne, `validation_errors` eventuel
+      - JSON non parseable: `error` + `raw_output`
+      - plafond de tours  : `error` seul
+
+    `output` et `validation_errors` peuvent etre renseignes EN MEME TEMPS :
+    une sortie produite mais non conforme reste une sortie. L'interface doit
+    afficher les deux, jamais l'une a la place de l'autre.
+    """
+
+    claim_id: str
+    output: Optional[dict[str, Any]] = None
+    validation_errors: list[str] = Field(default_factory=list)
+    tool_call_trace: list[ToolCall] = Field(default_factory=list)
+    usage: dict[str, int] = Field(default_factory=dict)
+    error: Optional[str] = None
+    raw_output: Optional[str] = None
+
+
+# =============================================================================
+# Divers
+# =============================================================================
+
+class Health(BaseModel):
+    status: str
+    model: str
+    api_key_configured: bool
+
+
+class RulesDocument(BaseModel):
+    name: str
+    content: str
+
+
+class Rules(BaseModel):
+    """Documents de reference, servis tels quels : ils font foi, et
+    l'interface doit pouvoir les montrer sans reformulation."""
+
+    documents: list[RulesDocument]

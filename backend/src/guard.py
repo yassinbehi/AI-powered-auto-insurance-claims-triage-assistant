@@ -278,12 +278,18 @@ def _record_guard_usage(usage: dict) -> None:
     _guard_usage_total = cost.accumulate_usage(_guard_usage_total, usage)
 
 
-def classify_client_text(text: str, client: Optional[anthropic.Anthropic] = None) -> dict:
+def classify_client_text(
+    text: str,
+    client: Optional[anthropic.Anthropic] = None,
+    use_classifier: bool = True,
+) -> dict:
     """Fait passer un texte client par les 3 couches et renvoie le verdict
     ainsi que le texte reellement transmissible au modele principal.
 
     Renvoie un dict :
-        verdict               : SAFE | SUSPECT | INJECTION
+        verdict               : SAFE | SUSPECT | INJECTION, ou None si la
+                                couche [2] n'a pas ete executee (voir
+                                use_classifier ci-dessous)
         markers_found         : marqueurs deterministes trouves (couche [1])
         classifier_available  : False si l'appel LLM a echoue (on retombe
                                 alors sur le seul verdict deterministe)
@@ -291,6 +297,16 @@ def classify_client_text(text: str, client: Optional[anthropic.Anthropic] = None
                                 INJECTION
         original_text         : texte d'origine, conserve pour la trace
                                 uniquement (jamais envoye au modele)
+
+    use_classifier=False n'execute que les couches [1] et [3] : aucun appel
+    API, donc aucun cout. Sert aux consultations en lecture seule (fiche
+    dossier de l'API HTTP) qui n'ont pas a depenser un appel de modele.
+
+    Dans ce mode, quand la couche [1] ne tranche pas, le verdict renvoye est
+    None - JAMAIS SAFE. Sans la couche [2], rien n'atteste que le texte est
+    sain, et fabriquer un SAFE par defaut reviendrait a afficher une garantie
+    que le filtre n'a pas produite. L'appelant doit presenter cette absence de
+    verdict comme telle.
     """
     original_text = text or ""
     sanitized = sanitize_client_text(original_text)
@@ -316,6 +332,19 @@ def classify_client_text(text: str, client: Optional[anthropic.Anthropic] = None
             "classifier_available": True,
             "classifier_called": False,
             "text_for_model": wrap_untrusted(""),
+            "original_text": original_text,
+        }
+
+    if not use_classifier:
+        # Couche [1] n'a rien trouve, couche [2] non sollicitee : on ne peut
+        # rien conclure. Le texte est tout de meme assaini et encadre avant
+        # d'etre expose (couche [3]).
+        return {
+            "verdict": None,
+            "markers_found": [],
+            "classifier_available": True,  # non sollicite, mais pas en echec
+            "classifier_called": False,
+            "text_for_model": wrap_untrusted(sanitized),
             "original_text": original_text,
         }
 
@@ -364,7 +393,11 @@ def reset_screening_cache() -> None:
     _screening_cache.clear()
 
 
-def screen_claim(claim: dict, client: Optional[anthropic.Anthropic] = None) -> dict:
+def screen_claim(
+    claim: dict,
+    client: Optional[anthropic.Anthropic] = None,
+    use_classifier: bool = True,
+) -> dict:
     """Renvoie une COPIE du claim dont description_client a ete remplace par
     la version transmissible au modele, plus un bloc `_screening` de trace.
 
@@ -372,13 +405,29 @@ def screen_claim(claim: dict, client: Optional[anthropic.Anthropic] = None) -> d
     tracabilite (SUJET_PROJET.md: "traces par etape") : elle ne fait pas
     partie du contrat de sortie (contrat_sortie.md) et ne doit pas etre
     recopiee dans le JSON final.
+
+    use_classifier=False n'execute aucun appel API (voir classify_client_text)
+    et peut donc renvoyer un verdict None.
     """
     claim_id = claim.get("claim_id", "")
     if claim_id in _screening_cache:
+        # Le memo ne contient que des screenings COMPLETS (voir plus bas) :
+        # le reutiliser est toujours au moins aussi informatif que de
+        # recalculer, y compris quand l'appelant se contente des couches
+        # deterministes.
         screening = _screening_cache[claim_id]
     else:
-        screening = classify_client_text(claim.get("description_client", ""), client=client)
-        if claim_id:
+        screening = classify_client_text(
+            claim.get("description_client", ""),
+            client=client,
+            use_classifier=use_classifier,
+        )
+        # On ne memorise QUE les screenings complets. Sans cette condition,
+        # une simple consultation en lecture seule (use_classifier=False)
+        # empoisonnerait le memo avec un verdict None, et le triage lance
+        # ensuite sur le meme sinistre reutiliserait ce non-verdict sans
+        # jamais executer la couche [2].
+        if claim_id and use_classifier:
             _screening_cache[claim_id] = screening
 
     screened = dict(claim)
