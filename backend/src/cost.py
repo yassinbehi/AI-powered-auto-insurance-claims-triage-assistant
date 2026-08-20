@@ -41,7 +41,11 @@ def usage_to_dict(usage) -> dict:
 
 def calculate_cost_usd(usage: dict) -> float:
     """Cout en USD d'un usage donne. Suppose un cache TTL de 5 minutes (la
-    seule TTL utilisee dans agent.py : cache_control sans ttl explicite)."""
+    seule TTL utilisee dans agent.py : cache_control sans ttl explicite).
+
+    Tarif unique : le mode batch (-50%) a ete retire du projet, tous les
+    appels sont donc synchrones et factures au tarif standard.
+    """
     return (
         usage.get("input_tokens", 0) / 1_000_000 * PRICE_INPUT_PER_MTOK_USD
         + usage.get("output_tokens", 0) / 1_000_000 * PRICE_OUTPUT_PER_MTOK_USD
@@ -61,7 +65,12 @@ def accumulate_usage(totals: dict, usage: dict) -> dict:
 
 def format_cost_report(totals: dict) -> dict:
     """Ajoute cost_usd et les flags de depassement de budget a un dict
-    d'usage accumule (voir accumulate_usage)."""
+    d'usage accumule (voir accumulate_usage).
+
+    `totals` doit inclure TOUS les appels du programme, y compris ceux du
+    filtre anti-injection (src/guard.py) : ils sont factures au meme tarif
+    que les appels de triage, et les omettre sous-estime le budget.
+    """
     cost_usd = calculate_cost_usd(totals)
     over_ceiling = cost_usd > BUDGET_CEILING_USD
     over_target = cost_usd > BUDGET_TARGET_MAX_USD

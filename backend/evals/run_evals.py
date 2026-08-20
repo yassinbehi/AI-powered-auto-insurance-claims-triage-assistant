@@ -10,11 +10,11 @@ fraude/hors_garantie).
 Ce script est INDEPENDANT de src/main.py (jamais importe par lui) : c'est le
 seul endroit du code qui evalue une sortie contre une reponse attendue.
 
-Par defaut, utilise le MODE BATCH (agent.submit_batch_triage /
-retrieve_batch_results) pour tous les claim_id uniques du fichier de cas,
-conformement a budget_tokens.md: "Utiliser batch pour evals completes non
-urgentes." Le mode normal reste disponible via --mode normal si besoin de
-deboguer un seul cas en direct.
+Chaque claim_id unique du fichier de cas est traite UNE FOIS par
+agent.triage_claim (streaming, boucle d'outils synchrone), puis chaque cas
+d'eval est grade contre ce resultat. Le mode batch a ete retire du projet :
+il n'exercait pas la boucle agentique (voir la note en tete de
+src/agent.py), donc un score mesure en batch ne disait rien de l'agent.
 
 PRINCIPE (budget_tokens.md: "Utiliser des evals code-gradees avant le
 judge.") : ce fichier ne fait QUE des verifications programmatiques
@@ -53,12 +53,21 @@ import os
 import sys
 from typing import Optional
 
+# Sortie JSON en UTF-8 quel que soit l'encodage par defaut de la console
+# (ex. cp1252 sur Windows). Sans cela, `python evals/run_evals.py > out.json`
+# produit un fichier que json.load(..., encoding="utf-8") refuse de lire des
+# qu'un accent apparait dans un message client. Meme correctif que
+# src/main.py.
+sys.stdout.reconfigure(encoding="utf-8")
+sys.stderr.reconfigure(encoding="utf-8")
+
 import anthropic
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 
 import agent
 import cost
+import guard
 from config import EVAL_CASES_FILE
 from tools import ClaimNotFound, get_claim_eval_labels
 
@@ -195,7 +204,7 @@ def _priority_matches_expected(case, result, context):
     # expected vient de case["_priorite_attendue"] (injecte par
     # evaluate_cases via tools.get_claim_eval_labels), PAS de
     # context["claim"] : ce dernier est aussi ce qui est envoye au modele
-    # (prompt batch / tool_result), et ne doit donc jamais contenir la
+    # (via le tool_result de get_claim), et ne doit donc jamais contenir la
     # reponse attendue (voir tools.get_claim).
     out = _output(result)
     if out is None:
@@ -333,7 +342,7 @@ def run_check(check_name, case, result, context):
 
 
 # =============================================================================
-# Execution du batch et evaluation des cas
+# Execution du triage et evaluation des cas
 # =============================================================================
 
 def _load_expected_labels(claim_id: str) -> dict:
@@ -346,22 +355,23 @@ def _load_expected_labels(claim_id: str) -> dict:
         return {}
 
 
-def evaluate_cases(cases: list, mode: str = "batch", client: Optional[anthropic.Anthropic] = None):
+def evaluate_cases(cases: list, client: Optional[anthropic.Anthropic] = None):
     client = client or anthropic.Anthropic()
     unique_claim_ids = sorted({c["claim_id"] for c in cases})
+
+    # Remis a zero AVANT le pre-calcul du contexte (qui declenche les appels
+    # du filtre anti-injection via screen_claim) : sans cela, une execution
+    # dans un processus deja utilise heriterait de l'usage d'une execution
+    # precedente et gonflerait le cout rapporte.
+    guard.reset_guard_usage()
+    guard.reset_screening_cache()
 
     context_by_claim = {cid: agent._prefetch_context(cid) for cid in unique_claim_ids}
     expected_labels_by_claim = {cid: _load_expected_labels(cid) for cid in unique_claim_ids}
 
-    if mode == "batch":
-        batch_id = agent.submit_batch_triage(unique_claim_ids, client=client)
-        agent.wait_for_batch(batch_id, client=client)
-        results_list = agent.retrieve_batch_results(batch_id, client=client)
-        results_by_claim = {r["claim_id"]: r for r in results_list}
-    elif mode == "normal":
-        results_by_claim = {cid: agent.triage_claim_normal(cid, client=client) for cid in unique_claim_ids}
-    else:
-        raise ValueError(f"mode invalide: {mode!r}")
+    # Un seul appel de triage par claim_id, meme si le claim_id apparait dans
+    # plusieurs cas d'eval (voir usage_by_claim plus bas pour le cout).
+    results_by_claim = {cid: agent.triage_claim(cid, client=client) for cid in unique_claim_ids}
 
     evaluated = []
     for case in cases:
@@ -402,10 +412,32 @@ def evaluate_cases(cases: list, mode: str = "batch", client: Optional[anthropic.
     # sommer sur `evaluated` compterait son cout plusieurs fois.
     usage_by_claim = {cid: r.get("usage", {}) for cid, r in results_by_claim.items()}
 
-    return evaluated, usage_by_claim
+    # Traces par claim_id (SUJET_PROJET.md: "traces par etape"). Regroupees
+    # ici plutot que recopiees dans chaque cas : un meme claim_id apparait
+    # dans 2 a 3 cas d'eval, la duplication triplerait le poids du JSON de
+    # sortie sans rien apporter. L'en-tete de ce fichier annonce conserver
+    # ces elements depuis le debut ; ils etaient en realite jetes avec le
+    # reste de `result` (seuls output/validation_errors survivaient), ce qui
+    # rendait toute inspection cas par cas impossible.
+    traces_by_claim = {
+        cid: {
+            "context": context_by_claim.get(cid, {}),
+            "tool_call_trace": results_by_claim.get(cid, {}).get("tool_call_trace", []),
+            "usage": usage_by_claim.get(cid, {}),
+            "error": results_by_claim.get(cid, {}).get("error"),
+            "raw_output": results_by_claim.get(cid, {}).get("raw_output"),
+        }
+        for cid in unique_claim_ids
+    }
+
+    return evaluated, usage_by_claim, traces_by_claim, guard.get_guard_usage_total()
 
 
-def summarize(evaluated: list, usage_by_claim: Optional[dict] = None) -> dict:
+def summarize(
+    evaluated: list,
+    usage_by_claim: Optional[dict] = None,
+    guard_usage: Optional[dict] = None,
+) -> dict:
     n = len(evaluated)
     n_json_ok = sum(1 for e in evaluated if e["output"] is not None)
     n_triage_ok = sum(1 for e in evaluated if e["triage_correct"])
@@ -428,6 +460,15 @@ def summarize(evaluated: list, usage_by_claim: Optional[dict] = None) -> dict:
     for usage in (usage_by_claim or {}).values():
         usage_totals = cost.accumulate_usage(usage_totals, usage)
 
+    # Les appels du filtre anti-injection (src/guard.py) ne passent pas par
+    # agent.py et etaient donc absents de ce rapport, alors que src/main.py
+    # les comptait deja : le cout affiche par l'eval etait sous-estime.
+    # Meme tarif que les appels de triage, donc simplement additionnes.
+    guard_totals = guard_usage or cost.empty_usage_totals()
+    guard_cost_usd = cost.calculate_cost_usd(guard_totals)
+    triage_cost_usd = cost.calculate_cost_usd(usage_totals)
+    usage_totals = cost.accumulate_usage(usage_totals, guard_totals)
+
     return {
         "total_cases": n,
         "json_parseable_pct": round(100 * n_json_ok / n, 1) if n else 0,
@@ -446,7 +487,13 @@ def summarize(evaluated: list, usage_by_claim: Optional[dict] = None) -> dict:
             "human_validation_required_for_fraude_hors_garantie": "== 100%",
             "cost": "< 5 USD",
         },
-        "cost": cost.format_cost_report(usage_totals),
+        "cost": {
+            **cost.format_cost_report(usage_totals),
+            # Detail du total : le triage lui-meme vs le filtre anti-injection.
+            "cost_usd_triage": round(triage_cost_usd, 4),
+            "cost_usd_guard_anti_injection": round(guard_cost_usd, 4),
+            "guard_usage": guard_totals,
+        },
     }
 
 
@@ -454,15 +501,20 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Harnais d'evaluation code-gradee.")
-    parser.add_argument("--mode", choices=["batch", "normal"], default="batch")
     parser.add_argument("--cases", default=CASES_PATH)
     args = parser.parse_args()
 
     cases = load_cases(args.cases)
-    evaluated, usage_by_claim = evaluate_cases(cases, mode=args.mode)
-    summary = summarize(evaluated, usage_by_claim)
+    evaluated, usage_by_claim, traces_by_claim, guard_usage = evaluate_cases(cases)
+    summary = summarize(evaluated, usage_by_claim, guard_usage=guard_usage)
 
-    print(json.dumps({"summary": summary, "cases": evaluated}, ensure_ascii=False, indent=2))
+    print(
+        json.dumps(
+            {"summary": summary, "cases": evaluated, "traces": traces_by_claim},
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":

@@ -267,3 +267,30 @@ class TestSummarize:
                                         "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}
         summary = evals.summarize(evaluated, usage_by_claim=usage_by_claim)
         assert summary["cost"]["cost_usd"] == 1.00  # not 2.00
+
+    def test_cout_du_filtre_anti_injection_inclus_dans_le_total(self):
+        # Les appels de guard.py ne passent pas par agent.py : sans cette
+        # addition, le cout rapporte par l'eval etait sous-estime.
+        evaluated = [
+            {"case_id": "A", "claim_id": "CLM-001", "expected_triage": "x", "triage_correct": True,
+             "checks": {}, "output": {}, "validation_errors": []},
+        ]
+        usage_by_claim = {"CLM-001": {"input_tokens": 1_000_000, "output_tokens": 0,
+                                        "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}
+        guard_usage = {"input_tokens": 500_000, "output_tokens": 0,
+                       "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
+        summary = evals.summarize(evaluated, usage_by_claim=usage_by_claim, guard_usage=guard_usage)
+        assert summary["cost"]["cost_usd_triage"] == 1.00
+        assert summary["cost"]["cost_usd_guard_anti_injection"] == 0.50
+        assert summary["cost"]["cost_usd"] == 1.50
+
+    def test_cout_sans_filtre_reste_celui_du_triage(self):
+        evaluated = [
+            {"case_id": "A", "claim_id": "CLM-001", "expected_triage": "x", "triage_correct": True,
+             "checks": {}, "output": {}, "validation_errors": []},
+        ]
+        usage_by_claim = {"CLM-001": {"input_tokens": 1_000_000, "output_tokens": 0,
+                                        "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}
+        summary = evals.summarize(evaluated, usage_by_claim=usage_by_claim)
+        assert summary["cost"]["cost_usd"] == 1.00
+        assert summary["cost"]["cost_usd_guard_anti_injection"] == 0.0

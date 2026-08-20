@@ -6,26 +6,22 @@ Point d'entree fonctionnel du triage de sinistres.
 Traite des sinistres reels a partir de data/claims_auto.csv (et des polices
 associees dans data/policies_auto.csv, recuperees par l'agent via les tools),
 les fait passer par l'agent de triage (src/agent.py), et affiche le JSON de
-triage produit pour chacun - avec les erreurs de validation (schema.py) et,
-en mode normal, la trace des appels d'outils pour tracabilite.
+triage produit pour chacun - avec les erreurs de validation (schema.py) et la
+trace des appels d'outils pour tracabilite.
 
 Ce fichier ne contient AUCUNE logique d'evaluation/grading (l'ancien harnais
 code-grade et son dossier evals/ ont ete retires : ce n'etait pas souhaite
 dans le code applicatif). claims_auto.csv reste la source de donnees des
 sinistres a traiter.
 
-Choix du mode laisse a l'utilisateur via --mode (voir triage_claim_normal et
-submit_batch_triage/retrieve_batch_results dans agent.py) :
-    - normal (streaming, boucle d'outils synchrone, un appel API par sinistre)
-    - batch  (tools executes localement, un seul job groupe pour tous les
-      sinistres - par defaut, plus economique pour traiter plusieurs
-      sinistres a la fois)
+Un seul mode d'execution : streaming avec boucle d'outils synchrone, un
+appel API par sinistre (voir agent.triage_claim). Le mode batch a ete retire
+du projet - voir la note en tete de src/agent.py.
 
-Usage:
-    python src/main.py                       # tous les sinistres, mode normal (defaut)
-    python src/main.py --mode batch           # tous les sinistres, mode batch
-    python src/main.py CLM-001                # un seul sinistre, mode normal
-    python src/main.py CLM-001 CLM-002 --mode batch
+Usage (depuis la racine du depot) :
+    python backend/src/main.py               # tous les sinistres de claims_auto.csv
+    python backend/src/main.py CLM-001       # un seul sinistre
+    python backend/src/main.py CLM-001 CLM-002
 """
 
 import argparse
@@ -47,30 +43,17 @@ import guard
 from tools import list_claim_ids
 
 
-def _run_batch(claim_ids: List[str], client: anthropic.Anthropic) -> List[dict]:
-    batch_id = agent.submit_batch_triage(claim_ids, client=client)
-    agent.wait_for_batch(batch_id, client=client)
-    return agent.retrieve_batch_results(batch_id, client=client)
-
-
 def run(
     claim_ids: Optional[List[str]] = None,
-    mode: str = "normal",
     client: Optional[anthropic.Anthropic] = None,
 ) -> List[dict]:
     """Traite une liste de sinistres (ou tous les sinistres de
     claims_auto.csv si claim_ids est omis) et renvoie leurs resultats de
-    triage bruts (voir agent.triage_claim_normal / agent.retrieve_batch_results
-    pour le format).
+    triage bruts (voir agent.triage_claim pour le format).
     """
     client = client or anthropic.Anthropic()
     claim_ids = claim_ids or list_claim_ids()
-
-    if mode == "batch":
-        return _run_batch(claim_ids, client)
-    if mode == "normal":
-        return [agent.triage_claim_normal(cid, client=client) for cid in claim_ids]
-    raise ValueError(f"mode invalide: {mode!r} (attendu 'normal' ou 'batch').")
+    return [agent.triage_claim(cid, client=client) for cid in claim_ids]
 
 
 def main():
@@ -80,19 +63,9 @@ def main():
         nargs="*",
         help="Un ou plusieurs claim_id a traiter. Si omis: tous les sinistres de claims_auto.csv.",
     )
-    parser.add_argument(
-        "--mode",
-        choices=["batch", "normal"],
-        default="normal",
-        help=(
-            "'normal' (streaming, boucle d'outils synchrone, un appel API par "
-            "sinistre) ou 'batch' (tools executes localement, un seul job "
-            "groupe pour tous les sinistres). Defaut: normal."
-        ),
-    )
     args = parser.parse_args()
 
-    results = run(claim_ids=args.claim_id or None, mode=args.mode)
+    results = run(claim_ids=args.claim_id or None)
     print(json.dumps(results, ensure_ascii=False, indent=2))
 
     # Cout sur stderr (jamais stdout, qui doit rester du JSON pur, ex.

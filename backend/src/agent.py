@@ -1,30 +1,27 @@
 """
 src/agent.py
 
-Boucle agentique de triage, avec deux modes (decision utilisateur,
-conversation) :
+Boucle agentique de triage : appel synchrone en streaming, boucle d'outils
+classique (tool_use -> execution -> tool_result -> ...), pour un triage en
+direct d'un sinistre. Repond a l'exigence de SUJET_PROJET.md: "Streaming
+reponse client" et "Agent loop avec tool_result correctement rattache au
+tool_use".
 
-    - "normal" (defaut) : appel synchrone en streaming, boucle d'outils
-      classique (tool_use -> execution -> tool_result -> ...), pour un
-      triage en direct d'un seul sinistre. Repond a l'exigence de
-      SUJET_PROJET.md: "Streaming reponse client".
-    - "batch"  : pour traiter plusieurs sinistres a la fois sans attendre
-      une reponse immediate (ex: evals, cf. budget_tokens.md: "Utiliser
-      batch pour evals completes non urgentes").
+MODE BATCH RETIRE (decision utilisateur, 20/08/2026) :
+Ce module a longtemps propose un second mode "batch" (API Batch d'Anthropic,
+-50% sur le tarif) pour traiter plusieurs sinistres sans reponse immediate.
+Il a ete supprime de tout le projet. La raison de fond : l'API Batch ne
+permet pas de derouler une boucle d'outils synchrone au sein d'un item de
+batch (le modele ne peut pas "attendre" un tool_result au milieu d'un job
+asynchrone). Le mode batch devait donc executer les 5 tools en Python et
+n'envoyer au modele que le contexte deja calcule - autrement dit il
+n'exercait PAS la boucle agentique, qui est justement le coeur du sujet. Un
+score mesure en batch ne disait rien de l'agent.
 
-LIMITE TECHNIQUE IMPORTANTE (a savoir avant d'utiliser le mode batch) :
-L'API Batch d'Anthropic ne permet pas d'executer une boucle d'outils
-synchrone au sein d'un meme item de batch (le modele ne peut pas "attendre"
-un tool_result en plein milieu d'un job batch asynchrone). Pour rester
-compatible avec les 5 tools tout en utilisant le batch, ce module :
-    1. execute les 5 tools directement en Python (deterministes, aucun
-       besoin d'un modele pour un simple lookup CSV / calcul de regles),
-    2. envoie en UNE SEULE requete par sinistre (regroupees dans un seul
-       batch job) tout le contexte deja calcule, en demandant au modele de
-       ne produire QUE le JSON final conforme a contrat_sortie.md.
-Le mode normal, lui, garde la vraie boucle agentique tool_use/tool_result,
-car il est synchrone et peut se permettre d'attendre les tools a chaque
-tour.
+A NOTER : budget_tokens.md demande "Utiliser batch pour evals completes non
+urgentes". Le projet s'ecarte donc volontairement de cette ligne, au profit
+d'un mode unique qui exerce reellement la boucle d'outils. Le cache de
+prompt (ci-dessous) reste l'optimisation de cout principale.
 
 CACHE DE PROMPT (budget_tokens.md: "Cacher les regles sinistres") :
 Le system prompt (prompts/system_prompt.md) et la liste des tools sont
@@ -34,8 +31,7 @@ cache_control: {"type": "ephemeral"}, ce qui met en cache tout ce qui
 precede pour les appels suivants.
 
 MODELE : budget_tokens.md precise "Modele par defaut: Claude Haiku 4.5."
--> on utilise ce modele par defaut dans les deux modes ; rien dans les
-documents ne demande de changer de modele selon normal/batch.
+-> c'est le modele utilise ici.
 
 CE QUI N'EST PAS IMPLEMENTE ICI (faute de specification dans les
 documents) :
@@ -53,17 +49,14 @@ documents) :
 import json
 import re
 import time
-from typing import List, Optional
+from typing import Optional
 
 import anthropic
 
 import cost
 from config import (
-    BATCH_MAX_WAIT_SECONDS,
-    BATCH_POLL_INTERVAL_SECONDS,
     MAX_RETRIES,
-    MAX_TOKENS_BATCH,
-    MAX_TOKENS_NORMAL,
+    MAX_TOKENS,
     MAX_TOOL_TURNS,
     MODEL,
     REGLES_SINISTRES_FILE,
@@ -213,7 +206,7 @@ def _execute_tool_use_block(block) -> dict:
 # Mode "normal" : boucle agentique synchrone, en streaming.
 # =============================================================================
 
-def triage_claim_normal(claim_id: str, client: Optional[anthropic.Anthropic] = None) -> dict:
+def triage_claim(claim_id: str, client: Optional[anthropic.Anthropic] = None) -> dict:
     """Triage d'un seul sinistre en mode normal (streaming, boucle d'outils
     synchrone). Retourne un dict avec le JSON de triage (si produit et
     valide), les erreurs de validation eventuelles, et l'historique des
@@ -248,7 +241,7 @@ def triage_claim_normal(claim_id: str, client: Optional[anthropic.Anthropic] = N
             _stream_final_message,
             client,
             model=MODEL,
-            max_tokens=MAX_TOKENS_NORMAL,
+            max_tokens=MAX_TOKENS,
             system=system_blocks,
             tools=cached_tools,
             messages=messages,
@@ -263,7 +256,7 @@ def triage_claim_normal(claim_id: str, client: Optional[anthropic.Anthropic] = N
             # Pas d'appel d'outil -> le modele a produit sa reponse finale.
             text_blocks = [b.text for b in final_message.content if b.type == "text"]
             final_text = "\n".join(text_blocks).strip()
-            return _finalize_normal_result(claim_id, final_text, claim_snapshot, tool_call_trace, usage_totals)
+            return _finalize_result(claim_id, final_text, claim_snapshot, tool_call_trace, usage_totals)
 
         # Executer chaque tool_use et rattacher chaque tool_result au bon
         # tool_use_id (SUJET_PROJET.md: "tool_result correctement rattache
@@ -330,7 +323,7 @@ def _parse_final_json(text: str) -> Optional[dict]:
     return None
 
 
-def _finalize_normal_result(claim_id, final_text, claim_snapshot, tool_call_trace, usage_totals) -> dict:
+def _finalize_result(claim_id, final_text, claim_snapshot, tool_call_trace, usage_totals) -> dict:
     parsed = _parse_final_json(final_text)
     if parsed is None:
         return {
@@ -354,15 +347,19 @@ def _finalize_normal_result(claim_id, final_text, claim_snapshot, tool_call_trac
 
 
 # =============================================================================
-# Mode "batch" : tools executes localement, un seul appel modele par
-# sinistre (regroupes dans un batch job), pas de boucle d'outils
-# synchrone. Voir note "LIMITE TECHNIQUE IMPORTANTE" en tete de fichier.
+# Pre-calcul deterministe du contexte d'un sinistre.
 # =============================================================================
 
 def _prefetch_context(claim_id: str) -> dict:
     """Execute localement les 5 tools pour un sinistre, sans passer par le
     modele (ils sont deterministes). Renvoie soit le contexte complet, soit
     une erreur si le claim/policy est introuvable.
+
+    N'est PAS utilise par la boucle de triage (le modele appelle les tools
+    lui-meme, c'est tout l'interet du mode agentique). Cette fonction sert a
+    evals/run_evals.py, qui a besoin des resultats de reference des tools
+    pour grader certains checks, et a toute inspection hors ligne d'un
+    dossier. Aucun appel API.
     """
     try:
         claim = get_claim(claim_id)
@@ -394,175 +391,23 @@ def _prefetch_context(claim_id: str) -> dict:
     }
 
 
-def _build_batch_user_message(context: dict) -> str:
-    return (
-        "Voici le contexte deja calcule pour ce sinistre (resultats des "
-        "tools get_claim, get_policy, check_coverage, estimate_repair_band, "
-        "detect_fraud_signals). N'appelle aucun tool : produis directement "
-        "et uniquement le JSON de triage final conforme au contrat de "
-        "sortie, a partir de ce contexte.\n\n"
-        f"{json.dumps(context, ensure_ascii=False, indent=2)}"
-    )
-
-
-def submit_batch_triage(claim_ids: List[str], client: Optional[anthropic.Anthropic] = None) -> str:
-    """Soumet un job batch pour plusieurs sinistres. Retourne l'id du batch.
-
-    Les sinistres dont le contexte ne peut pas etre pre-calcule (claim_id ou
-    policy_id introuvable) sont exclus du batch et remontes separement,
-    plutot que d'envoyer un item invalide au modele.
-    """
-    client = client or anthropic.Anthropic()
-
-    requests = []
-    skipped = []
-    for claim_id in claim_ids:
-        context = _prefetch_context(claim_id)
-        if "error" in context:
-            skipped.append({"claim_id": claim_id, "error": context["error"]})
-            continue
-
-        requests.append(
-            {
-                "custom_id": claim_id,
-                "params": {
-                    "model": MODEL,
-                    "max_tokens": MAX_TOKENS_BATCH,
-                    "system": _build_cached_system_blocks(),
-                    "messages": [
-                        {"role": "user", "content": _build_batch_user_message(context)}
-                    ],
-                },
-            }
-        )
-
-    if not requests:
-        raise ValueError(f"Aucun sinistre valide a soumettre. Ignores: {skipped}")
-
-    batch = _call_with_retry(client.messages.batches.create, requests=requests)
-    return batch.id
-
-
-class BatchTimeoutError(RuntimeError):
-    """Levee par wait_for_batch quand un batch job ne se termine pas dans le
-    delai imparti (config.BATCH_MAX_WAIT_SECONDS), plutot que de laisser
-    l'appelant attendre indefiniment un job bloque.
-    """
-
-
-def wait_for_batch(
-    batch_id: str,
-    client: Optional[anthropic.Anthropic] = None,
-    max_wait_seconds: int = BATCH_MAX_WAIT_SECONDS,
-) -> None:
-    """Bloque jusqu'a ce que le batch `batch_id` ait terminé (processing_status
-    == 'ended'), en pollant toutes les BATCH_POLL_INTERVAL_SECONDS. Leve
-    BatchTimeoutError si max_wait_seconds est depasse.
-    """
-    client = client or anthropic.Anthropic()
-    elapsed = 0
-    while True:
-        status = client.messages.batches.retrieve(batch_id).processing_status
-        if status == "ended":
-            return
-        if elapsed >= max_wait_seconds:
-            raise BatchTimeoutError(
-                f"Batch {batch_id!r} toujours '{status}' apres {elapsed}s "
-                f"(max_wait_seconds={max_wait_seconds})."
-            )
-        time.sleep(BATCH_POLL_INTERVAL_SECONDS)
-        elapsed += BATCH_POLL_INTERVAL_SECONDS
-
-
-def retrieve_batch_results(batch_id: str, client: Optional[anthropic.Anthropic] = None) -> List[dict]:
-    """Recupere et valide les resultats d'un batch deja termine.
-
-    Ne bloque pas en attendant que le batch se termine : appelant
-    responsable de verifier `client.messages.batches.retrieve(batch_id).processing_status`
-    avant d'appeler cette fonction (non fait automatiquement ici, car un
-    batch peut prendre longtemps et ce module ne doit pas bloquer
-    indefiniment sans que l'appelant le decide explicitement).
-    """
-    client = client or anthropic.Anthropic()
-    results = []
-
-    for entry in client.messages.batches.results(batch_id):
-        claim_id = entry.custom_id
-
-        if entry.result.type != "succeeded":
-            results.append({"claim_id": claim_id, "error": f"Batch item echoue: {entry.result.type}"})
-            continue
-
-        message = entry.result.message
-        usage = cost.usage_to_dict(message.usage)
-        text_blocks = [b.text for b in message.content if b.type == "text"]
-        final_text = "\n".join(text_blocks).strip()
-
-        parsed = _parse_final_json(final_text)
-        if parsed is None:
-            results.append(
-                {
-                    "claim_id": claim_id,
-                    "error": "JSON invalide dans la reponse batch.",
-                    "raw_output": final_text,
-                    "usage": usage,
-                }
-            )
-            continue
-
-        # blessure necessaire pour valider validation_humaine_requise ;
-        # recuperee via un nouveau get_claim local (pas d'appel API).
-        try:
-            claim = get_claim(claim_id)
-            blessure = claim.get("blessure") == "oui"
-        except ClaimNotFound:
-            blessure = False
-
-        validation_errors = validate_full(parsed, blessure=blessure)
-        results.append(
-            {"claim_id": claim_id, "output": parsed, "validation_errors": validation_errors, "usage": usage}
-        )
-
-    return results
-
-
 # =============================================================================
-# Point d'entree unique, avec le choix de mode laisse a l'appelant
-# (decision utilisateur : defaut = normal, option = batch).
+# Point d'entree unique.
 # =============================================================================
 
-def triage(claim_id: str, mode: str = "normal", client: Optional[anthropic.Anthropic] = None) -> dict:
-    """Point d'entree pour un triage a l'unite.
-
-    mode="normal" (defaut) : streaming, boucle d'outils synchrone.
-    mode="batch" : soumet un batch d'un seul item et attend sa completion en
-        interrogeant periodiquement le statut (poll). Utile pour tester le
-        mode batch sur un seul sinistre ; pour un vrai usage en masse,
-        preferer submit_batch_triage() + retrieve_batch_results() separement
-        pour ne pas bloquer sur l'attente.
-    """
-    if mode == "normal":
-        return triage_claim_normal(claim_id, client=client)
-
-    if mode == "batch":
-        client = client or anthropic.Anthropic()
-        batch_id = submit_batch_triage([claim_id], client=client)
-        wait_for_batch(batch_id, client=client)
-        results = retrieve_batch_results(batch_id, client=client)
-        return results[0] if results else {"claim_id": claim_id, "error": "Aucun resultat batch."}
-
-    raise ValueError(f"mode invalide: {mode!r} (attendu 'normal' ou 'batch').")
+def triage(claim_id: str, client: Optional[anthropic.Anthropic] = None) -> dict:
+    """Point d'entree pour un triage a l'unite : streaming, boucle d'outils
+    synchrone. Alias de triage_claim, conserve comme nom d'API stable
+    pour les appelants."""
+    return triage_claim(claim_id, client=client)
 
 
 if __name__ == "__main__":
     import sys
 
     if len(sys.argv) < 2:
-        print("Usage: python3 agent.py <claim_id> [normal|batch]")
+        print("Usage: python backend/src/agent.py <claim_id>")
         sys.exit(1)
 
-    claim_id_arg = sys.argv[1]
-    mode_arg = sys.argv[2] if len(sys.argv) > 2 else "normal"
-
-    result = triage(claim_id_arg, mode=mode_arg)
+    result = triage(sys.argv[1])
     print(json.dumps(result, ensure_ascii=False, indent=2))

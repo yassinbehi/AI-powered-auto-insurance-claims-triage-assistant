@@ -8,8 +8,8 @@ triage principal.
 POURQUOI CETTE COUCHE (SUJET_PROJET.md, "Securite: prompt injection dans
 declaration") :
 Avant ce module, description_client arrivait BRUT jusqu'au modele principal
-(via tool_result en mode normal, via _build_batch_user_message en mode
-batch). La seule protection etait une consigne en prose dans la section 1 de
+(via le tool_result de get_claim). La seule protection etait une consigne en
+prose dans la section 1 de
 prompts/system_prompt.md. Autrement dit, le modele qui lit du texte
 potentiellement hostile etait aussi celui qui detient les 5 tools et prend la
 decision de triage : une injection reussie pouvait donc directement

@@ -7,27 +7,35 @@ from dotenv import load_dotenv
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = PROJECT_ROOT / "data"
-PROMPTS_DIR = PROJECT_ROOT / "prompts"
+# Ce fichier vit dans backend/src/, d'ou les deux niveaux de racine :
+#   BACKEND_ROOT = backend/      (code applicatif : src, evals, prompts, tests)
+#   REPO_ROOT    = racine du depot (contient backend/ et data/)
+BACKEND_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = BACKEND_ROOT.parent
+
+# data/ est RESTE a la racine du depot, volontairement hors de backend/ : ce
+# sont les donnees d'entree fournies avec le sujet, en lecture seule, et elles
+# ne sont pas la propriete du backend. Ne pas remplacer ce chemin par
+# BACKEND_ROOT / "data" sans deplacer le dossier lui-meme.
+DATA_DIR = REPO_ROOT / "data"
+PROMPTS_DIR = BACKEND_ROOT / "prompts"
 
 POLICIES_FILE = DATA_DIR / "policies_auto.csv"
 CLAIMS_FILE = DATA_DIR / "claims_auto.csv"
 REGLES_SINISTRES_FILE = DATA_DIR / "regles_sinistres.md"
 SYSTEM_PROMPT_PATH = PROMPTS_DIR / "system_prompt.md"
 
-# Charge .env (voir .env.example) des l'import de ce module, avant tout appel
-# a anthropic.Anthropic() ailleurs dans le code. N'ecrase jamais une variable
+# Charge backend/.env des l'import de ce module, avant tout appel a
+# anthropic.Anthropic() ailleurs dans le code. N'ecrase jamais une variable
 # deja presente dans l'environnement (comportement par defaut de load_dotenv).
-load_dotenv(PROJECT_ROOT / ".env")
+load_dotenv(BACKEND_ROOT / ".env")
 
 # ---------------------------------------------------------------------------
 # Anthropic API
 # ---------------------------------------------------------------------------
 # budget_tokens.md: "Modele par defaut: Claude Haiku 4.5."
 MODEL = "claude-haiku-4-5-20251001"
-MAX_TOKENS_NORMAL = 1500
-MAX_TOKENS_BATCH = 1000
+MAX_TOKENS = 1500
 
 # ---------------------------------------------------------------------------
 # Agent loop limits
@@ -39,14 +47,6 @@ MAX_TOOL_TURNS = 8
 # ---------------------------------------------------------------------------
 MAX_RETRIES = 3
 RETRY_BASE_DELAY_SECONDS = 2
-
-# ---------------------------------------------------------------------------
-# Batch job polling
-# ---------------------------------------------------------------------------
-BATCH_POLL_INTERVAL_SECONDS = 5
-# Non documente : borne max d'attente avant d'abandonner le polling plutot
-# que d'attendre indefiniment un batch bloque. Valeur arbitraire (30 min).
-BATCH_MAX_WAIT_SECONDS = 1800
 
 # ---------------------------------------------------------------------------
 # Business thresholds (regles_sinistres.md, contrat_sortie.md)

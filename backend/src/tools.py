@@ -598,31 +598,31 @@ def handle_estimate_repair_band_tool_call(tool_input: dict) -> dict:
 POLICY_RECENT_DAYS = 30  # NON DOCUMENTE - a valider avec l'utilisateur
 MONTANT_ELEVE_THRESHOLD_TND = EXPERTISE_REQUIRED_THRESHOLD_TND  # reutilise le seuil regles_sinistres.md
 
-# Signaux remontes a titre INFORMATIF mais qui ne comptent PAS dans la
-# "combinaison" de regles_sinistres.md ("Signal fraude si combinaison de:
-# ...").
+# NATURE de chaque signal, remontee comme INFORMATION pour aider a juger -
+# jamais comme un verdict.
 #
-# INTERPRETATION EXPLICITE de "incoherence police" : ce module l'avait
-# d'abord traduit par "date_sinistre hors de la periode [date_debut,
-# date_fin]", c'est-a-dire une police expiree ou pas encore active. A
-# l'usage, c'est un fait ADMINISTRATIF (police echue), deja porte par
-# check_coverage et par les dates elles-memes, et non un indice d'intention
-# frauduleuse : une police expiree de 3 jours (CLM-001) ou de plusieurs mois
-# (CLM-003) releve du dossier a regulariser, pas de la fraude. Le compter
-# comme facteur de fraude faisait basculer ces dossiers en
-# `suspicion_fraude` a tort.
+# regles_sinistres.md dit "Signal fraude si combinaison de: declaration
+# tardive, montant eleve, incoherence police, vol recent, pieces
+# insuffisantes." Decider si une combinaison donnee suffit a soupconner une
+# fraude est un JUGEMENT (c'est le travail d'un gestionnaire), pas un calcul :
+# ce module ne tranche donc pas. Il a un temps expose un booleen
+# `combinaison_fraude_atteinte` calcule avec un seuil chiffre et une liste de
+# signaux "non comptants" - deux regles absentes des documents du projet, qui
+# faisaient passer une interpretation d'implementation pour une exigence
+# client. Elles ont ete retirees.
 #
-# Une "incoherence police" au sens de regles_sinistres.md serait plutot une
-# CONTRADICTION entre la declaration et la police (vehicule, conducteur,
-# usage declare...), non calculable avec les colonnes actuelles. Le signal
-# de date reste donc remonte dans signaux_fraude (il doit rester visible),
-# mais il est exclu du decompte de la combinaison.
-NON_COUNTING_FRAUD_SIGNALS = {"incoherence_police_date_hors_couverture"}
-
-# Nombre de signaux distincts requis pour parler de "combinaison"
-# (regles_sinistres.md n'en chiffre pas le seuil : 2 est la lecture minimale
-# du mot "combinaison").
-FRAUD_COMBINATION_THRESHOLD = 2
+# Ce qui reste utile et factuel : distinguer un signal ADMINISTRATIF (un etat
+# du dossier, sans intention supposee - ex. une police echue, deja signalee
+# par check_coverage) d'un signal COMPORTEMENTAL (un motif dans la maniere
+# dont le sinistre est declare). Le modele en tire les consequences lui-meme.
+SIGNAL_NATURE = {
+    "incoherence_police_date_hors_couverture": "administratif",
+    "sinistre_juste_apres_ouverture_police": "comportemental",
+    "vol_recent": "comportemental",
+    "montant_eleve": "comportemental",
+    "pieces_insuffisantes": "administratif",
+    "achat_recent_suivi_perte_declaree": "comportemental",
+}
 
 SUSPICIOUS_PURCHASE_KEYWORDS = ["achat", "achete", "achetee", "acquis", "acquisition"]
 SUSPICIOUS_SHORT_DELAY_KEYWORDS = [
@@ -782,12 +782,12 @@ def detect_fraud_signals(claim: dict, policy: dict) -> FraudSignalsResult:
     details["pieces_obligatoires_documentees"] = DOCUMENTED_REQUIRED_PIECES.get(type_sinistre, [])
     details["type_a_pieces_obligatoires_documentees"] = type_sinistre in DOCUMENTED_REQUIRED_PIECES
 
-    # --- Conclusion "combinaison" calculee ICI, pas par le modele ---------
-    # Le modele ne compte rien et n'arbitre rien : il lit un booleen. Voir
-    # NON_COUNTING_FRAUD_SIGNALS pour les signaux exclus du decompte.
-    signaux_comptants = [s for s in signaux if s not in NON_COUNTING_FRAUD_SIGNALS]
-    details["signaux_comptant_pour_combinaison"] = signaux_comptants
-    details["combinaison_fraude_atteinte"] = len(signaux_comptants) >= FRAUD_COMBINATION_THRESHOLD
+    # --- Nature de chaque signal : information, pas verdict ---------------
+    # Ce tool ne conclut pas a la fraude (voir SIGNAL_NATURE) : il decrit ce
+    # qu'il observe et laisse l'appreciation de la "combinaison" au modele.
+    details["nature_des_signaux"] = {
+        s: SIGNAL_NATURE.get(s, "non_classe") for s in signaux
+    }
 
     # --- pieces recommandees non bloquantes (types hors liste documentee) -
     if type_sinistre in NON_BLOCKING_RECOMMENDED_PIECES:
@@ -808,13 +808,16 @@ def detect_fraud_signals(claim: dict, policy: dict) -> FraudSignalsResult:
 DETECT_FRAUD_SIGNALS_TOOL_SCHEMA = {
     "name": "detect_fraud_signals",
     "description": (
-        "Repere des patterns suspects simples a partir d'un claim et d'une "
+        "Releve des OBSERVATIONS factuelles a partir d'un claim et d'une "
         "policy : sinistre juste apres ouverture de police, incoherence de "
         "dates par rapport a la periode de couverture, montant eleve, "
-        "pieces insuffisantes (quand evaluable). Renvoie aussi la liste des "
-        "signaux non evaluables faute de donnees (ex: lieu, declaration "
-        "tardive). Ne conclut jamais seul a une fraude averee : la decision "
-        "et la validation humaine restent en aval (contrat_sortie.md)."
+        "pieces insuffisantes (quand evaluable), achat recent suivi d'une "
+        "perte declaree. Renvoie aussi la nature de chaque signal "
+        "(administratif ou comportemental) et la liste des signaux non "
+        "evaluables faute de donnees (ex: lieu, declaration tardive). "
+        "NE CONCLUT PAS : ce tool ne dit jamais s'il y a fraude ni si les "
+        "signaux 'se combinent' au sens de regles_sinistres.md. C'est a toi "
+        "d'apprecier, puis a un humain de valider (contrat_sortie.md)."
     ),
     "input_schema": {
         "type": "object",
