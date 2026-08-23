@@ -1,4 +1,4 @@
-# Projet 2 - Assurance: Assistant de triage des sinistres auto
+# Projet - Assurance: Assistant de triage des sinistres auto
 
 Client fictif: TSA (Triage Sinistres Auto) pour une compagnie d'assurance IARD.
 
