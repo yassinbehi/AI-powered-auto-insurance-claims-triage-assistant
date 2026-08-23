@@ -1,14 +1,19 @@
 "use client";
 
 import { RefreshCw, Unplug } from "lucide-react";
+import * as React from "react";
 
 import { PageContainer } from "@/components/layout/page-container";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { devWarn } from "@/lib/dev-log";
 
 /**
- * La panne la plus frequente en demo est le backend non demarre. Le message
- * l'annonce en clair et donne la commande, au lieu d'afficher une trace.
+ * Page d'erreur.
+ *
+ * Le message d'origine et la commande a lancer sont des informations de
+ * developpeur : ils partent dans la console. L'ecran ne dit que ce qu'un
+ * gestionnaire peut faire, c'est-a-dire reessayer ou prevenir quelqu'un.
  */
 export default function Error({
   error,
@@ -17,24 +22,18 @@ export default function Error({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
-  const backendInjoignable = error.message.includes("injoignable");
+  React.useEffect(() => {
+    devWarn(error.message, error.digest);
+  }, [error]);
 
   return (
     <PageContainer className="max-w-2xl space-y-6">
       <Alert variant="destructive">
         <Unplug aria-hidden="true" />
-        <AlertTitle>
-          {backendInjoignable
-            ? "L'API de triage est injoignable"
-            : "Cette page n'a pas pu être chargée"}
-        </AlertTitle>
+        <AlertTitle>Le service est momentanément indisponible</AlertTitle>
         <AlertDescription>
-          <p>{error.message}</p>
-          {backendInjoignable ? (
-            <pre className="mt-2 w-full overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs text-foreground">
-              uvicorn api:app --app-dir backend/src
-            </pre>
-          ) : null}
+          Les dossiers ne peuvent pas être chargés pour l&apos;instant. Réessayez dans un
+          instant ; si le problème persiste, signalez-le au support.
         </AlertDescription>
       </Alert>
 

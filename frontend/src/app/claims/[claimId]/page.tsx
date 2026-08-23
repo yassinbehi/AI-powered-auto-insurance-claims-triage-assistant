@@ -1,15 +1,15 @@
 import { Play } from "lucide-react";
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 
 import { BlessureFlag, InjectionFlag } from "@/components/claims/claim-flags";
+import { ClientMessagePanel } from "@/components/claims/client-message-panel";
 import { DeterministicAnalysis } from "@/components/claims/deterministic-analysis";
 import { ClaimFactsPanel, PolicyPanel } from "@/components/claims/policy-panel";
-import { UntrustedTextPanel } from "@/components/claims/untrusted-text-panel";
 import { PageContainer, PageHeader } from "@/components/layout/page-container";
 import { TypeSinistreBadge } from "@/components/status/domain-badges";
 import { Button } from "@/components/ui/button";
-import { ApiNotFoundError, fetchClaimDetail } from "@/lib/api-server";
+import { ApiNoDatasetError, ApiNotFoundError, fetchClaimDetail } from "@/lib/api-server";
 import { formatDate } from "@/lib/status";
 
 /**
@@ -33,14 +33,21 @@ export default async function FicheDossierPage({
   // aller-retour supplementaire vers l'API sur CHAQUE affichage de fiche.
   // Pour une console interne, sans enjeu de referencement, l'echange n'en
   // vaut pas la peine.
-  const detail = await fetchClaimDetail(claimId).catch((error: unknown) => {
-    if (error instanceof ApiNotFoundError) return null;
-    throw error;
-  });
+  const resultat = await fetchClaimDetail(claimId).then(
+    (detail) => ({ kind: "ok" as const, detail }),
+    (error: unknown) => {
+      // Les fichiers ont ete retires entre-temps : il n'y a plus de dossier
+      // a montrer, on renvoie a l'ecran de depot.
+      if (error instanceof ApiNoDatasetError) return { kind: "sans-donnees" as const };
+      if (error instanceof ApiNotFoundError) return { kind: "introuvable" as const };
+      throw error;
+    },
+  );
 
-  if (!detail) notFound();
+  if (resultat.kind === "sans-donnees") redirect("/");
+  if (resultat.kind === "introuvable") notFound();
 
-  const { claim, policy, coverage, repair_band, fraud_signals, screening } = detail;
+  const { claim, policy, coverage, repair_band, fraud_signals, screening } = resultat.detail;
 
   return (
     <PageContainer className="space-y-8">
@@ -49,9 +56,7 @@ export default async function FicheDossierPage({
           <>
             <TypeSinistreBadge type={claim.type_sinistre} />
             {claim.blessure === "oui" ? <BlessureFlag /> : null}
-            {screening.markers_found.length > 0 ? (
-              <InjectionFlag markers={screening.markers_found} />
-            ) : null}
+            {screening.markers_found.length > 0 ? <InjectionFlag /> : null}
           </>
         }
         title={<span className="font-mono">{claim.claim_id}</span>}
@@ -60,7 +65,7 @@ export default async function FicheDossierPage({
           <Button asChild>
             <Link href={`/claims/${claim.claim_id}/triage`}>
               <Play aria-hidden="true" />
-              Lancer le triage
+              Analyser le dossier
             </Link>
           </Button>
         }
@@ -68,7 +73,7 @@ export default async function FicheDossierPage({
 
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="space-y-4 lg:col-span-2">
-          <UntrustedTextPanel claimId={claim.claim_id} screening={screening} />
+          <ClientMessagePanel claimId={claim.claim_id} screening={screening} />
           <ClaimFactsPanel claim={claim} />
         </div>
         <PolicyPanel policy={policy} />

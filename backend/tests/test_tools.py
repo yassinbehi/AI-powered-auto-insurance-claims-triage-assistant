@@ -172,3 +172,36 @@ def test_list_claim_ids_returns_all_claims_sorted():
     assert ids == sorted(ids)
     assert "CLM-001" in ids
     assert len(ids) == 8
+
+
+# =============================================================================
+# Absence de repli sur data/
+# =============================================================================
+
+class TestAucunRepliSurLeDepot:
+    """Les CSV de data/ sont les jeux d'essai des evaluations, pas la source
+    de l'application. Rien ne doit les lire sans qu'on le demande."""
+
+    def test_lecture_refusee_sans_jeu_de_donnees(self):
+        import dataset
+        import tools as tools_module
+        from tools import NoDatasetLoaded
+
+        dataset.clear()
+        # Les fichiers existent : si une lecture aboutissait, c'est qu'elle
+        # s'y serait rabattue.
+        assert tools_module.DEFAULT_CLAIMS_PATH.exists()
+        with pytest.raises(NoDatasetLoaded):
+            get_claim("CLM-001")
+        with pytest.raises(NoDatasetLoaded):
+            get_policy("POL-002")
+        with pytest.raises(NoDatasetLoaded):
+            list_claim_ids()
+
+    def test_chargement_explicite_puis_lecture(self):
+        import dataset
+        import tools as tools_module
+
+        dataset.clear()
+        tools_module.load_dataset_from_files()
+        assert get_claim("CLM-001")["claim_id"] == "CLM-001"

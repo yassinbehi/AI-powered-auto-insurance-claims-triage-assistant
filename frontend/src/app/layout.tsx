@@ -18,9 +18,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Triage sinistres auto",
+  title: "TSA — Triage Sinistres Auto",
   description:
-    "Assistant de triage des déclarations de sinistre auto : couverture, pièces manquantes, signaux de fraude et validation humaine.",
+    "TSA, assistant de triage des déclarations de sinistre auto : couverture, pièces manquantes, signaux de fraude et validation humaine.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

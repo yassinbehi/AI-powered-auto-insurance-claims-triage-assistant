@@ -8,11 +8,22 @@
  * Le lancement d'un triage ne figure pas ici : il part de la fiche dossier.
  * Une ligne de tableau cliquable qui declencherait une boucle agentique de
  * plusieurs dizaines de secondes serait trop facile a atteindre par erreur.
+ *
+ * La colonne "Urgence" est la seule valeur CALCULEE de ce tableau, au milieu
+ * de faits lus dans le fichier. Le contrat de claim-flags.tsx s'y etend :
+ * ce n'est pas une decision, seulement un ordre de lecture propose. Elle
+ * vient en premier parce que la question de cet ecran est "par ou je
+ * commence", et qu'une bande verticale de jauges se balaie du regard.
  */
 
 import Link from "next/link";
 
-import { BlessureFlag, InjectionFlag, MontantCell } from "@/components/claims/claim-flags";
+import {
+  BlessureFlag,
+  InjectionFlag,
+  MontantCell,
+  UrgenceCell,
+} from "@/components/claims/claim-flags";
 import { TypeSinistreBadge } from "@/components/status/domain-badges";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -38,9 +49,7 @@ function Signalements({ claim }: { claim: ClaimSummary }) {
   return (
     <div className="flex flex-wrap gap-1.5">
       {claim.blessure === "oui" ? <BlessureFlag /> : null}
-      {claim.injection_markers_found.length > 0 ? (
-        <InjectionFlag markers={claim.injection_markers_found} />
-      ) : null}
+      {claim.injection_markers_found.length > 0 ? <InjectionFlag /> : null}
     </div>
   );
 }
@@ -57,7 +66,41 @@ function Assure({ claim }: { claim: ClaimSummary }) {
   );
 }
 
-export function ClaimsTable({ claims }: { claims: ClaimSummary[] }) {
+/**
+ * File vide. DEUX messages distincts, et la distinction compte : une file
+ * filtree a zero resultat n'est pas une application sans donnees. Les
+ * confondre ferait croire a une perte de dossiers.
+ */
+function FileVide({ filtresActifs }: { filtresActifs: boolean }) {
+  return (
+    <div className="rounded-lg border border-dashed p-8 text-center">
+      <p className="text-sm text-muted-foreground">
+        {filtresActifs
+          ? "Aucun dossier ne correspond à ces filtres."
+          : "Aucun dossier dans les fichiers chargés."}
+      </p>
+      {filtresActifs ? (
+        // Un lien simple suffit : retourner a la page nue retire tous les
+        // parametres. Aucun composant client necessaire.
+        <Button asChild variant="outline" size="sm" className="mt-4">
+          <Link href="/">Réinitialiser les filtres</Link>
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+export function ClaimsTable({
+  claims,
+  filtresActifs = false,
+}: {
+  claims: ClaimSummary[];
+  filtresActifs?: boolean;
+}) {
+  if (claims.length === 0) {
+    return <FileVide filtresActifs={filtresActifs} />;
+  }
+
   return (
     <>
       {/* Tableau : a partir de md */}
@@ -65,6 +108,7 @@ export function ClaimsTable({ claims }: { claims: ClaimSummary[] }) {
         <Table>
           <TableHeader>
             <TableRow>
+              <TableHead className="w-44">Urgence</TableHead>
               <TableHead>Sinistre</TableHead>
               <TableHead>Assuré</TableHead>
               <TableHead>Type</TableHead>
@@ -76,6 +120,12 @@ export function ClaimsTable({ claims }: { claims: ClaimSummary[] }) {
           <TableBody>
             {claims.map((claim) => (
               <TableRow key={claim.claim_id}>
+                <TableCell>
+                  <UrgenceCell
+                    urgence={claim.urgence_estimee}
+                    motifs={claim.urgence_motifs}
+                  />
+                </TableCell>
                 <TableCell>
                   <p className="font-mono font-medium">{claim.claim_id}</p>
                   <p className="text-xs text-muted-foreground tabular-nums">
@@ -123,6 +173,11 @@ export function ClaimsTable({ claims }: { claims: ClaimSummary[] }) {
                   </div>
                   <TypeSinistreBadge type={claim.type_sinistre} />
                 </div>
+
+                <UrgenceCell
+                  urgence={claim.urgence_estimee}
+                  motifs={claim.urgence_motifs}
+                />
 
                 <Assure claim={claim} />
 

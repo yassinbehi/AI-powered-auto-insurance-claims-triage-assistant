@@ -9,15 +9,8 @@
 
 import { StatusBadge } from "@/components/status/status-badge";
 import { Badge } from "@/components/ui/badge";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import {
-  PRIORITE_META,
-  TRIAGE_META,
-  TYPE_SINISTRE_LABEL,
-  VERDICT_META,
-  verdictKey,
-} from "@/lib/status";
-import type { Priorite, Triage, TypeSinistre, Verdict } from "@/lib/types";
+import { PRIORITE_META, TRIAGE_META, TYPE_SINISTRE_LABEL } from "@/lib/status";
+import type { Priorite, Triage, TypeSinistre } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 export function TriageBadge({ triage, className }: { triage: Triage; className?: string }) {
@@ -72,25 +65,5 @@ export function TypeSinistreBadge({
     <Badge variant="outline" className={className}>
       {TYPE_SINISTRE_LABEL[type] ?? type}
     </Badge>
-  );
-}
-
-export function ScreeningBadge({
-  verdict,
-  className,
-}: {
-  verdict: Verdict | null;
-  className?: string;
-}) {
-  const meta = VERDICT_META[verdictKey(verdict)];
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span className={cn("inline-flex", className)}>
-          <StatusBadge tone={meta.tone} icon={meta.Icon} label={meta.label} />
-        </span>
-      </TooltipTrigger>
-      <TooltipContent className="max-w-xs">{meta.hint}</TooltipContent>
-    </Tooltip>
   );
 }

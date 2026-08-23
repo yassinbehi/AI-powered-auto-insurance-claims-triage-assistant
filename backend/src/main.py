@@ -1,7 +1,7 @@
 """
 src/main.py
 
-Point d'entree fonctionnel du triage de sinistres.
+Point d'entree en ligne de commande du triage de sinistres.
 
 Traite des sinistres reels a partir de data/claims_auto.csv (et des polices
 associees dans data/policies_auto.csv, recuperees par l'agent via les tools),
@@ -18,9 +18,21 @@ Un seul mode d'execution : streaming avec boucle d'outils synchrone, un
 appel API par sinistre (voir agent.triage_claim). Le mode batch a ete retire
 du projet - voir la note en tete de src/agent.py.
 
+AUCUNE ANALYSE AUTOMATIQUE (decision utilisateur) :
+Cette commande a longtemps traite TOUS les sinistres du CSV quand on
+l'appelait sans argument. C'est retire. Le sinistre a traiter doit desormais
+etre nomme explicitement, pour deux raisons :
+
+    1. Aucun triage ne doit partir sans que quelqu'un l'ait demande pour un
+       dossier precis. La meme regle vaut dans l'interface web, ou l'analyse
+       part d'un bouton, dossier par dossier, et ou aucun bouton "tout
+       analyser" n'existe.
+    2. Un appel sans argument declenchait huit appels de modele d'affilee,
+       soit environ dix fois le cout d'une analyse, sur une simple faute de
+       frappe.
+
 Usage (depuis la racine du depot) :
-    python backend/src/main.py               # tous les sinistres de claims_auto.csv
-    python backend/src/main.py CLM-001       # un seul sinistre
+    python backend/src/main.py CLM-001
     python backend/src/main.py CLM-001 CLM-002
 """
 
@@ -40,37 +52,57 @@ import anthropic
 import agent
 import cost
 import guard
-from tools import list_claim_ids
+import tools
 
 
 def run(
-    claim_ids: Optional[List[str]] = None,
+    claim_ids: List[str],
     client: Optional[anthropic.Anthropic] = None,
 ) -> List[dict]:
-    """Traite une liste de sinistres (ou tous les sinistres de
-    claims_auto.csv si claim_ids est omis) et renvoie leurs resultats de
-    triage bruts (voir agent.triage_claim pour le format).
+    """Traite les sinistres nommes et renvoie leurs resultats de triage bruts
+    (voir agent.triage_claim pour le format).
+
+    `claim_ids` est OBLIGATOIRE et ne peut pas etre vide : il n'existe aucun
+    comportement par defaut du type "traiter tout le fichier". Voir la note
+    "AUCUNE ANALYSE AUTOMATIQUE" en tete de module.
     """
+    if not claim_ids:
+        raise ValueError(
+            "Aucun sinistre a traiter : indiquez au moins un claim_id. "
+            "Cette fonction ne traite jamais l'ensemble du fichier d'elle-meme."
+        )
+
+    # Les CSV de data/ sont les jeux d'essai du projet. La commande en
+    # terminal les charge EXPLICITEMENT : depuis que le repli automatique a
+    # ete retire, rien ne lit plus data/ sans qu'on le demande.
+    tools.load_dataset_from_files()
+
     client = client or anthropic.Anthropic()
-    claim_ids = claim_ids or list_claim_ids()
     return [agent.triage_claim(cid, client=client) for cid in claim_ids]
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Triage des sinistres auto (data/claims_auto.csv).")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Triage d'un ou plusieurs sinistres de data/claims_auto.csv. "
+            "Chaque sinistre traite declenche un appel de modele."
+        ),
+    )
+    # nargs="+" : argparse refuse la commande sans argument et affiche l'aide,
+    # avant qu'aucun appel de modele ne parte.
     parser.add_argument(
         "claim_id",
-        nargs="*",
-        help="Un ou plusieurs claim_id a traiter. Si omis: tous les sinistres de claims_auto.csv.",
+        nargs="+",
+        help="Un ou plusieurs claim_id a traiter, ex: CLM-001. Obligatoire.",
     )
     args = parser.parse_args()
 
-    results = run(claim_ids=args.claim_id or None)
+    results = run(claim_ids=args.claim_id)
     print(json.dumps(results, ensure_ascii=False, indent=2))
 
     # Cout sur stderr (jamais stdout, qui doit rester du JSON pur, ex.
-    # `python src/main.py | jq .`). budget_tokens.md: plafond 5 USD, cible
-    # 1.50-2.75 USD.
+    # `python backend/src/main.py CLM-001 | jq .`). budget_tokens.md: plafond
+    # 5 USD, cible 1.50-2.75 USD.
     usage_totals = cost.empty_usage_totals()
     for r in results:
         if "usage" in r:

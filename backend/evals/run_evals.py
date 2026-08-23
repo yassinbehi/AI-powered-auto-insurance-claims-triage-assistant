@@ -69,7 +69,7 @@ import agent
 import cost
 import guard
 from config import EVAL_CASES_FILE
-from tools import ClaimNotFound, get_claim_eval_labels
+from tools import ClaimNotFound, get_claim_eval_labels, load_dataset_from_files
 
 
 CASES_PATH = EVAL_CASES_FILE
@@ -363,6 +363,11 @@ def evaluate_cases(cases: list, client: Optional[anthropic.Anthropic] = None):
     # du filtre anti-injection via screen_claim) : sans cela, une execution
     # dans un processus deja utilise heriterait de l'usage d'une execution
     # precedente et gonflerait le cout rapporte.
+    # Les cas d'evaluation portent sur les sinistres de data/ : on les charge
+    # explicitement comme jeu de donnees actif. C'est le seul chemin qui lit
+    # encore ces fichiers.
+    load_dataset_from_files()
+
     guard.reset_guard_usage()
     guard.reset_screening_cache()
 

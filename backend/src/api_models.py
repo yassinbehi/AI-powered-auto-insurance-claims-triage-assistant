@@ -152,6 +152,21 @@ class ClaimSummary(BaseModel):
     formule: Optional[str] = None
     injection_markers_found: list[str] = Field(default_factory=list)
 
+    # Repere de lecture calcule par src/urgence.py a partir des seules colonnes
+    # ci-dessus : deterministe, gratuit, disponible avant toute analyse.
+    #
+    # CE N'EST PAS TriageOutput.priorite. Celle-ci est une conclusion du
+    # modele, n'existe qu'apres un passage de l'agent, et rien ne la persiste.
+    # Les deux peuvent legitimement diverger sur un meme dossier ; l'interface
+    # ne leur donne ni les memes mots ni la meme forme. Voir urgence.py pour le
+    # bareme et pour la part qui en est deduite plutot que documentee.
+    #
+    # `str` et non Literal[...] : ce fichier tient deja les enums metier
+    # dehors (Claim.type_sinistre, RepairBandResult.bande) pour ne pas devenir
+    # une seconde source de verite a cote de urgence.NIVEAUX.
+    urgence_estimee: str = "normale"
+    urgence_motifs: list[str] = Field(default_factory=list)
+
 
 class ClaimDetail(BaseModel):
     """Fiche dossier complete : les 5 tools deroules de facon deterministe,
@@ -209,6 +224,49 @@ class Health(BaseModel):
     status: str
     model: str
     api_key_configured: bool
+
+
+class LigneRejetee(BaseModel):
+    """Ligne d'un fichier depose qui n'a pas pu etre lue.
+
+    Sert a rendre visible ce qui etait auparavant supprime en silence : une
+    ligne mal formee disparaissait du jeu de donnees sans que l'utilisateur,
+    qui l'avait pourtant fournie, puisse l'apprendre. Le numero de ligne est
+    celui du tableur (l'en-tete est la ligne 1) pour que la correction soit
+    immediate.
+    """
+
+    fichier: str
+    ligne: int
+    identifiant: str
+    raison: str
+
+
+class DatasetState(BaseModel):
+    """Etat du jeu de donnees depose par l'utilisateur (src/dataset.py).
+
+    `loaded` a false signifie que l'application n'a AUCUNE donnee : il n'y a
+    rien a lister et rien a analyser tant que les deux fichiers n'ont pas ete
+    deposes. Les fichiers de data/ ne servent jamais de repli.
+    """
+
+    loaded: bool
+    claims_filename: Optional[str] = None
+    policies_filename: Optional[str] = None
+    claims_count: Optional[int] = None
+    policies_count: Optional[int] = None
+    loaded_at: Optional[str] = None
+
+    # Declarations dont le contrat est absent du fichier des contrats. Ce
+    # n'est pas bloquant - les autres dossiers restent traitables - mais
+    # l'utilisateur doit le savoir avant de s'etonner d'une erreur.
+    claims_sans_contrat: list[str] = Field(default_factory=list)
+
+    # Lignes des deux fichiers qui n'ont pas pu etre lues. Le depot reussit
+    # malgre elles - les autres lignes sont exploitables - mais elles doivent
+    # etre affichees : sinon l'utilisateur travaille sur un fichier ampute
+    # sans le savoir.
+    lignes_rejetees: list[LigneRejetee] = Field(default_factory=list)
 
 
 class RulesDocument(BaseModel):

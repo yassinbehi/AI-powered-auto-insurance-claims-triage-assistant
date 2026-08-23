@@ -1,42 +1,75 @@
 "use client";
 
-import { LoaderCircle, Play, Square, TriangleAlert } from "lucide-react";
+import { CircleCheck, LoaderCircle, Play, TriangleAlert } from "lucide-react";
 
-import { RawStreamPane } from "@/components/triage/raw-stream-pane";
-import { AgentTimeline } from "@/components/triage/agent-timeline";
-import {
-  TriageResultCard,
-  ValidationErrorsAlert,
-} from "@/components/result/triage-result-card";
+import { TriageResultCard } from "@/components/result/triage-result-card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useTriageStream } from "@/hooks/use-triage-stream";
+import { Card, CardContent } from "@/components/ui/card";
+import { useTriageStream, type ProgressStep } from "@/hooks/use-triage-stream";
+import { cn } from "@/lib/utils";
 
-function texteDeStatut(
-  status: ReturnType<typeof useTriageStream>["status"],
-  tours: number,
-): string {
-  switch (status) {
-    case "idle":
-      return "Prêt à lancer le triage.";
-    case "running":
-      return tours === 0 ? "Triage lancé, en attente du modèle." : `Triage en cours, tour ${tours}.`;
-    case "done":
-      return "Triage terminé.";
-    case "cancelled":
-      return "Suivi interrompu.";
-    case "error":
-      return "Le triage a échoué.";
+/**
+ * Avancement de l'analyse, en termes de dossier.
+ *
+ * L'ancienne version montrait ici la boucle d'outils : noms de fonctions,
+ * entrees et sorties JSON, numeros de tour. C'est utile pour mettre au point
+ * l'agent, inutile pour traiter un sinistre. Le detail est desormais dans la
+ * console du navigateur ; l'ecran ne garde que ce qui se passe, en clair.
+ */
+function Avancement({ steps, termine }: { steps: ProgressStep[]; termine: boolean }) {
+  if (steps.length === 0) {
+    return (
+      <p className="flex items-center gap-2 text-sm text-muted-foreground">
+        <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
+        Ouverture du dossier…
+      </p>
+    );
   }
+
+  return (
+    <ol className="space-y-2">
+      {steps.map((step) => (
+        <li key={step.key} className="flex items-center gap-2 text-sm">
+          {step.done ? (
+            <CircleCheck className="size-4 shrink-0 text-success" aria-hidden="true" />
+          ) : (
+            <LoaderCircle
+              className="size-4 shrink-0 animate-spin text-muted-foreground"
+              aria-hidden="true"
+            />
+          )}
+          <span className={cn(step.done ? "text-muted-foreground" : "font-medium")}>
+            {step.label}
+          </span>
+          <span className="sr-only">{step.done ? "terminé" : "en cours"}</span>
+        </li>
+      ))}
+      {termine ? null : (
+        <li className="text-xs text-muted-foreground">L&apos;analyse prend quelques secondes.</li>
+      )}
+    </ol>
+  );
 }
 
-export function TriageRunView({ claimId }: { claimId: string }) {
-  const { status, turns, text, result, error, start, cancel } = useTriageStream(claimId);
+/**
+ * `brief` est le contenu de "Le sinistre en bref", construit par la page cote
+ * serveur et transmis tel quel a la carte de resultat, qui l'affiche comme un
+ * bloc parmi les autres. Il apparait donc avec le resultat de l'analyse, ni
+ * avant ni separement.
+ */
+export function TriageRunView({
+  claimId,
+  brief,
+}: {
+  claimId: string;
+  brief?: React.ReactNode;
+}) {
+  const { status, steps, output, error, start, cancel } = useTriageStream(claimId);
 
   const enCours = status === "running";
-  const statut = texteDeStatut(status, turns.length);
+  const termine = status === "done";
+  const lance = status !== "idle";
 
   return (
     <div className="space-y-6">
@@ -47,62 +80,45 @@ export function TriageRunView({ claimId }: { claimId: string }) {
           ) : (
             <Play aria-hidden="true" />
           )}
-          {status === "idle" ? "Lancer le triage" : "Relancer le triage"}
+          {status === "idle" ? "Analyser le dossier" : "Relancer l'analyse"}
         </Button>
 
         {enCours ? (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="outline" onClick={cancel}>
-                <Square aria-hidden="true" />
-                Arrêter le suivi
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent className="max-w-xs">
-              Ferme le flux côté navigateur. L&apos;appel de modèle déjà engagé se termine
-              sur le serveur : il est payé, l&apos;interrompre à mi-chemin ne rendrait rien.
-            </TooltipContent>
-          </Tooltip>
+          <Button variant="outline" onClick={cancel}>
+            Arrêter
+          </Button>
         ) : null}
 
-        {/* Progression annoncee par jalons. Le flux brut, lui, est en
-            aria-live="off" : l'annoncer fragment par fragment rendrait la page
-            inutilisable au lecteur d'ecran. */}
         <p role="status" aria-live="polite" className="text-sm text-muted-foreground">
-          {statut}
+          {enCours
+            ? "Analyse en cours…"
+            : termine
+              ? "Analyse terminée."
+              : status === "cancelled"
+                ? "Analyse interrompue."
+                : status === "error"
+                  ? ""
+                  : "Aucune analyse lancée pour ce dossier."}
         </p>
       </div>
 
       {error ? (
         <Alert variant="destructive">
           <TriangleAlert aria-hidden="true" />
-          <AlertTitle>Le triage n&apos;a pas abouti</AlertTitle>
-          <AlertDescription className="space-y-2">
-            <p>{error.message}</p>
-            {error.rawOutput ? (
-              <>
-                <p className="text-xs">Réponse brute du modèle :</p>
-                <pre className="max-h-48 w-full overflow-auto rounded-md bg-muted p-3 font-mono text-xs text-foreground">
-                  {error.rawOutput}
-                </pre>
-              </>
-            ) : null}
-          </AlertDescription>
+          <AlertTitle>L&apos;analyse n&apos;a pas abouti</AlertTitle>
+          <AlertDescription>{error}</AlertDescription>
         </Alert>
       ) : null}
 
-      {result?.output ? <TriageResultCard output={result.output} /> : null}
-      {result ? <ValidationErrorsAlert errors={result.validation_errors} /> : null}
+      {output ? <TriageResultCard output={output} brief={brief} /> : null}
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm">Déroulé de l&apos;agent</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          <AgentTimeline turns={turns} />
-          {status !== "idle" ? <RawStreamPane text={text} /> : null}
-        </CardContent>
-      </Card>
+      {lance && !output ? (
+        <Card>
+          <CardContent>
+            <Avancement steps={steps} termine={termine} />
+          </CardContent>
+        </Card>
+      ) : null}
     </div>
   );
 }

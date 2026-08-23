@@ -1,6 +1,6 @@
 # Projet 2 - Assurance: Assistant de triage des sinistres auto
 
-Client fictif: Neopolis Development pour une compagnie d'assurance IARD.
+Client fictif: TSA (Triage Sinistres Auto) pour une compagnie d'assurance IARD.
 
 ## Objectif
 

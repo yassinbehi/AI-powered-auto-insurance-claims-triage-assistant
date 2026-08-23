@@ -7,3 +7,5 @@ pytest>=7.4.0
 fastapi>=0.110.0
 uvicorn[standard]>=0.27.0
 httpx>=0.27.0
+# Requis par FastAPI pour le depot des deux fichiers d'entree (multipart).
+python-multipart>=0.0.9

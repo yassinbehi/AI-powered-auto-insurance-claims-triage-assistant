@@ -16,23 +16,21 @@
  * 2. Chaque statut porte une icone EN PLUS de sa couleur. Un statut ne doit
  *    jamais se lire uniquement a la couleur : daltonisme, impression en noir
  *    et blanc de la demo, contraste degrade sur videoprojecteur.
+ *
+ * Les libelles s'adressent a un gestionnaire de sinistres : pas de nom de
+ * champ, pas de vocabulaire technique.
  */
 
 import {
   CircleCheck,
   CircleSlash,
   FileQuestionMark,
-  FileText,
   Microscope,
   ShieldAlert,
-  ShieldCheck,
-  ShieldOff,
-  TriangleAlert,
-  UserSearch,
   type LucideIcon,
 } from "lucide-react";
 
-import type { NatureSignal, Priorite, Triage, TypeSinistre, Verdict } from "@/lib/types";
+import type { Priorite, Triage, TypeSinistre, Urgence } from "@/lib/types";
 
 /** Tons disponibles pour StatusBadge. `destructiveSoft` est un contour rouge
  *  et non un aplat : il exprime un refus de prise en charge, pas une alerte. */
@@ -51,7 +49,7 @@ export interface StatusMeta {
 }
 
 // =============================================================================
-// Triage (contrat_sortie.md)
+// Decision de triage (contrat_sortie.md)
 // =============================================================================
 
 export const TRIAGE_META: Record<Triage, StatusMeta> = {
@@ -100,62 +98,62 @@ export const PRIORITE_META: Record<Priorite, PrioriteMeta> = {
 };
 
 // =============================================================================
-// Verdict du filtre anti-injection (guard.py)
+// Urgence estimee (backend/src/urgence.py)
 // =============================================================================
 
-/** Cle interne pour l'absence de verdict. Le backend renvoie `null` quand la
- *  couche [2] n'a pas ete executee : ce n'est pas un feu vert, et l'interface
- *  ne doit surtout pas le presenter comme un SAFE. */
-export const VERDICT_NON_EVALUE = "NON_EVALUE" as const;
+/**
+ * TROISIEME FORME, et c'est tout l'enjeu.
+ *
+ * Le triage est un badge plein a icone ; la priorite, un badge contour a
+ * pastille ; l'urgence n'est pas un badge du tout, c'est une jauge a quatre
+ * segments. Elle ne dit pas la meme chose : elle existe AVANT toute analyse,
+ * gratuitement, et la priorite proposee ensuite par l'agent peut differer.
+ *
+ * Les libelles ne reprennent donc jamais le mot "Priorite". Sur les quatre
+ * niveaux, seul "normale" est un mot commun aux deux echelles, et c'est celui
+ * sur lequel personne n'agit.
+ */
+export interface UrgenceMeta {
+  label: string;
+  /** Segments allumes, de 1 a 4. Un statut ne se lit jamais a la seule
+   *  couleur : ici elle est doublee d'un decompte visible. */
+  segments: number;
+  /** Meme palette que PRIORITE_META : une seule echelle de couleur dans le
+   *  produit, meme quand les grandeurs different. */
+  dotClassName: string;
+}
 
-export type VerdictKey = Verdict | typeof VERDICT_NON_EVALUE;
-
-export const VERDICT_META: Record<VerdictKey, StatusMeta & { hint: string }> = {
-  SAFE: {
-    label: "Texte sain",
-    tone: "success",
-    Icon: ShieldCheck,
-    hint: "Les trois couches du filtre ont été exécutées : aucune tentative d'instruction détectée.",
-  },
-  SUSPECT: {
-    label: "Texte suspect",
-    tone: "warning",
-    Icon: TriangleAlert,
-    hint: "Formulation ambiguë, ou classifieur indisponible. Le filtre se ferme par défaut plutôt que de conclure au vert.",
-  },
-  INJECTION: {
-    label: "Injection détectée",
-    tone: "destructive",
-    Icon: ShieldAlert,
-    hint: "Une instruction adressée à l'assistant a été détectée. Le texte a été retiré avant d'atteindre le modèle de triage.",
-  },
-  [VERDICT_NON_EVALUE]: {
-    label: "Couche 2 non exécutée",
-    tone: "neutral",
-    Icon: ShieldOff,
-    hint: "Seules les couches déterministes ont tourné. Sans le classifieur, rien n'atteste que ce texte est sain — c'est une absence d'analyse, pas un feu vert.",
-  },
+export const URGENCE_META: Record<Urgence, UrgenceMeta> = {
+  basse: { label: "Urgence basse", segments: 1, dotClassName: "bg-muted-foreground/50" },
+  normale: { label: "Urgence normale", segments: 2, dotClassName: "bg-muted-foreground" },
+  haute: { label: "Urgence haute", segments: 3, dotClassName: "bg-warning" },
+  critique: { label: "Urgence critique", segments: 4, dotClassName: "bg-destructive" },
 };
 
-export function verdictKey(verdict: Verdict | null): VerdictKey {
-  return verdict ?? VERDICT_NON_EVALUE;
+/** Motifs produits par urgence.MOTIF_*. Repli sur humanize() comme
+ *  signalLabel : ce vocabulaire peut evoluer cote Python avant ici. */
+const URGENCE_MOTIF_LABELS: Record<string, string> = {
+  blessure_declaree: "Blessure déclarée",
+  devis_au_dessus_du_seuil: "Devis au-dessus du seuil d'expertise",
+  message_client_signale: "Message du client signalé",
+  montant_faible: "Montant faible",
+  montant_inconnu: "Montant non renseigné",
+};
+
+export function urgenceMotifLabel(motif: string): string {
+  return URGENCE_MOTIF_LABELS[motif] ?? humanize(motif);
 }
 
 // =============================================================================
-// Signaux de fraude (tools.SIGNAL_NATURE)
+// Points de vigilance
 // =============================================================================
-
-export const NATURE_META: Record<NatureSignal, { label: string; Icon: LucideIcon }> = {
-  administratif: { label: "Administratif", Icon: FileText },
-  comportemental: { label: "Comportemental", Icon: UserSearch },
-};
 
 /** Ensemble ferme produit par tools.detect_fraud_signals. Le modele peut
  *  toutefois écrire ses propres chaînes dans `signaux_fraude` : d'où le
  *  repli sur une simple mise en forme. */
 const SIGNAL_LABELS: Record<string, string> = {
   incoherence_police_date_hors_couverture: "Date hors période de couverture",
-  sinistre_juste_apres_ouverture_police: "Sinistre juste après l'ouverture de la police",
+  sinistre_juste_apres_ouverture_police: "Sinistre juste après l'ouverture du contrat",
   vol_recent: "Vol récent",
   montant_eleve: "Montant élevé",
   pieces_insuffisantes: "Pièces insuffisantes",
@@ -191,15 +189,6 @@ export const FORMULE_LABEL: Record<string, string> = {
   flotte_pro: "Flotte pro",
 };
 
-/** Les 5 tools de backend/src/tools.py. */
-export const TOOL_LABEL: Record<string, string> = {
-  get_claim: "Lire la déclaration",
-  get_policy: "Lire la police",
-  check_coverage: "Vérifier la couverture",
-  estimate_repair_band: "Estimer la réparation",
-  detect_fraud_signals: "Relever les signaux",
-};
-
 export const BANDE_META: Record<string, { label: string; tone: Tone }> = {
   leger: { label: "Léger", tone: "success" },
   modere: { label: "Modéré", tone: "neutral" },
@@ -212,12 +201,9 @@ export const BANDE_META: Record<string, { label: string; tone: Tone }> = {
 // =============================================================================
 
 /** Seuil d'expertise obligatoire (regles_sinistres.md, via
- *  config.EXPERTISE_REQUIRED_THRESHOLD_TND). Repris ici uniquement pour le
- *  reperage visuel : le calcul metier reste cote Python. */
+ *  config.EXPERTISE_REQUIRED_THRESHOLD_TND). Repris ici uniquement pour
+ *  l'affichage : le calcul metier reste cote Python. */
 export const SEUIL_EXPERTISE_TND = 5000;
-
-/** Plafond de longueur de message_client impose par le system prompt. */
-export const MESSAGE_CLIENT_MAX_MOTS = 40;
 
 const NUMBER_FORMAT = new Intl.NumberFormat("fr-FR");
 
@@ -229,8 +215,4 @@ export function formatDate(iso: string): string {
   const date = new Date(`${iso}T00:00:00`);
   if (Number.isNaN(date.getTime())) return iso;
   return new Intl.DateTimeFormat("fr-FR", { dateStyle: "medium" }).format(date);
-}
-
-export function countWords(text: string): number {
-  return text.trim().split(/\s+/).filter(Boolean).length;
 }

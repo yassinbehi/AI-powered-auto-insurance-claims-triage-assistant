@@ -12,7 +12,8 @@ export default function NotFound() {
         <FileX aria-hidden="true" />
         <AlertTitle>Dossier introuvable</AlertTitle>
         <AlertDescription>
-          Aucun sinistre ne porte cet identifiant dans claims_auto.csv.
+          Aucun sinistre ne porte cet identifiant dans le fichier des déclarations
+          que vous avez chargé.
         </AlertDescription>
       </Alert>
       <Button asChild variant="outline">

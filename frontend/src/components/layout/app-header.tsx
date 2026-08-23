@@ -4,7 +4,7 @@ import { ScrollText } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-import { RulesSheet } from "@/components/layout/rules-sheet";
+import { HowItWorksSheet } from "@/components/layout/how-it-works-sheet";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
 import { cn } from "@/lib/utils";
 
@@ -25,7 +25,14 @@ export function AppHeader() {
           className="flex items-center gap-2 rounded-md font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
         >
           <ScrollText className="size-5 text-muted-foreground" aria-hidden="true" />
-          <span>Triage sinistres auto</span>
+          <span className="font-semibold tracking-tight">TSA</span>
+          {/* Le sigle seul ne dit rien a qui arrive sur l'application. Le
+              developpement l'accompagne des que la largeur le permet ; en
+              dessous, la barre porte deja le lien de navigation, le panneau
+              d'aide et le theme. */}
+          <span className="hidden text-sm font-normal text-muted-foreground md:inline">
+            Triage Sinistres Auto
+          </span>
           <span className="sr-only">— retour à la file d&apos;attente</span>
         </Link>
 
@@ -45,7 +52,7 @@ export function AppHeader() {
         </nav>
 
         <div className="ml-auto flex items-center gap-1">
-          <RulesSheet />
+          <HowItWorksSheet />
           <ThemeToggle />
         </div>
       </div>

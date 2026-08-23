@@ -5,7 +5,14 @@ Couche HTTP au-dessus du domaine existant. N'implemente AUCUNE regle metier :
 elle expose ce que src/agent.py, src/tools.py et src/guard.py produisent deja.
 
 Lancement (depuis la racine du depot) :
-    uvicorn api:app --app-dir backend/src --reload
+    uvicorn api:app --app-dir backend/src
+
+NE PAS ajouter --reload. Le jeu de donnees depose vit dans la memoire du
+processus (src/dataset.py) : le rechargement a chaud redemarre le processus a
+chaque enregistrement d'un fichier Python, ce qui EFFACE les dossiers du
+gestionnaire en pleine session et le renvoie sans prevenir a l'ecran de depot.
+Pendant un developpement du backend, relancer la commande a la main est plus
+sur que de perdre les fichiers de l'utilisateur a chaque sauvegarde.
 
 Deux familles d'endpoints, volontairement separees :
 
@@ -20,8 +27,8 @@ Deux familles d'endpoints, volontairement separees :
 TROIS POINTS DE VIGILANCE, dans l'ordre d'importance :
 
 1. LES COLONNES DE REFERENCE NE SORTENT JAMAIS.
-   claims_auto.csv contient `priorite_attendue` et `triage_attendu`, qui sont
-   les reponses attendues des evals. tools.get_claim les retire deja, et
+   Un fichier de declarations peut contenir `priorite_attendue` et
+   `triage_attendu` (c'est le cas des jeux d'essai), les reponses des evals. tools.get_claim les retire deja, et
    tools.get_claim_eval_labels (qui, lui, les lit) n'est deliberement importe
    NULLE PART dans ce module. Les exposer rendrait toute mesure de qualite
    sans valeur. Un test dedie verifie cette absence sur les 8 sinistres.
@@ -49,16 +56,19 @@ import threading
 from datetime import datetime, timezone
 
 import anyio
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 import agent
+import dataset
 import guard
+import urgence
 from api_models import (
     ClaimDetail,
     ClaimSummary,
+    DatasetState,
     Health,
     Policy,
     Rules,
@@ -68,14 +78,20 @@ from api_models import (
 from config import DATA_DIR, MODEL, REGLES_SINISTRES_FILE
 from tools import (
     ClaimNotFound,
+    EncodageIllisible,
+    InvalidDatasetFile,
+    NoDatasetLoaded,
     PolicyNotFound,
+    decode_csv,
     get_claim,
     get_policy,
     list_claim_ids,
+    parse_claims_csv,
+    parse_policies_csv,
 )
 
 app = FastAPI(
-    title="Neopolis - triage de sinistres auto",
+    title="TSA - Triage Sinistres Auto",
     description=__doc__,
     version="1.0.0",
 )
@@ -84,10 +100,18 @@ app = FastAPI(
 # `rewrites` cote Next : le proxy de developpement de Next bufferise volontiers
 # les reponses text/event-stream, ce qui ferait arriver le triage d'un seul
 # bloc a la fin - exactement ce que cette interface cherche a montrer en direct.
+#
+# allow_methods DOIT LISTER TOUTES LES METHODES QUE LE NAVIGATEUR APPELLE.
+# Une methode absente n'echoue pas cote serveur : le navigateur envoie d'abord
+# un preflight OPTIONS, le middleware le refuse, et la requete ne part jamais.
+# Cote interface, cela se voit comme un "TypeError: Failed to fetch" sans
+# aucune trace applicative - le retrait du jeu de donnees (DELETE) a echoue
+# ainsi, alors que le meme appel passait en curl, qui ignore CORS.
+# A completer en meme temps que tout nouvel endpoint appele depuis le client.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["*"],
 )
 
@@ -116,13 +140,50 @@ def _acquire_run_lock() -> None:
 # Helpers
 # =============================================================================
 
+_AUCUN_JEU_DE_DONNEES = (
+    "Aucun fichier n'a ete depose. Deposez le fichier des declarations et "
+    "celui des contrats pour commencer."
+)
+
+
+_JEU_NON_DEPOSE = (
+    "Le jeu de donnees charge dans ce processus a ete lu sur le disque (jeux "
+    "d'essai des evaluations) et ne sera pas servi. Deposez le fichier des "
+    "declarations et celui des contrats."
+)
+
+
+def _exiger_jeu_de_donnees() -> None:
+    """Refuse de servir des sinistres qui ne viennent pas de l'utilisateur.
+
+    DEUX refus, et non un seul :
+
+      - rien n'est charge : sans ce garde-fou, les lecteurs de tools.py
+        leveraient NoDatasetLoaded au fond de la pile plutot que de renvoyer
+        un 409 clair ;
+
+      - quelque chose est charge, mais depuis le disque : c'est le cas d'un
+        appel a tools.load_dataset_from_files() (suite d'evaluation, commande
+        en terminal, tests) qui se produirait dans le processus du serveur.
+        Servir ces lignes ferait croire au gestionnaire qu'il travaille sur
+        ses dossiers alors qu'il regarderait les jeux d'essai de data/. Ce
+        refus est la traduction en code de la regle du projet : l'application
+        web ne traite QUE des fichiers deposes.
+    """
+    if not dataset.is_loaded():
+        raise HTTPException(status_code=409, detail=_AUCUN_JEU_DE_DONNEES)
+    if dataset.source() != dataset.SOURCE_DEPOT:
+        raise HTTPException(status_code=409, detail=_JEU_NON_DEPOSE)
+
+
 def _get_claim_or_404(claim_id: str) -> dict:
     try:
         return get_claim(claim_id)
     except ClaimNotFound as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=503, detail=str(e)) from e
+    except NoDatasetLoaded as e:
+        # Filet : _exiger_jeu_de_donnees passe normalement avant.
+        raise HTTPException(status_code=409, detail=_AUCUN_JEU_DE_DONNEES) from e
 
 
 def _get_policy_or_404(policy_id: str) -> dict:
@@ -130,8 +191,8 @@ def _get_policy_or_404(policy_id: str) -> dict:
         return get_policy(policy_id)
     except PolicyNotFound as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=503, detail=str(e)) from e
+    except NoDatasetLoaded as e:
+        raise HTTPException(status_code=409, detail=_AUCUN_JEU_DE_DONNEES) from e
 
 
 def _screening_from(screened_claim: dict) -> dict:
@@ -168,6 +229,117 @@ def health() -> dict:
     }
 
 
+# =============================================================================
+# Jeu de donnees depose par l'utilisateur
+# =============================================================================
+
+def _claims_sans_contrat(claims: dict, policies: dict) -> list:
+    return sorted(
+        claim_id
+        for claim_id, claim in claims.items()
+        if claim.get("policy_id") not in policies
+    )
+
+
+def _etat_du_jeu_de_donnees() -> dict:
+    # Un jeu de donnees lu sur le disque n'existe pas pour l'application web
+    # (voir _exiger_jeu_de_donnees) : l'interface doit voir un etat vide et
+    # afficher son ecran de depot, plutot qu'une file qu'elle ne pourra pas
+    # charger ensuite.
+    if dataset.source() != dataset.SOURCE_DEPOT:
+        return {"loaded": False}
+
+    etat = dataset.summary()
+    if etat.get("loaded"):
+        etat["claims_sans_contrat"] = _claims_sans_contrat(
+            dataset.get_claims() or {}, dataset.get_policies() or {}
+        )
+    return etat
+
+
+@app.get("/api/dataset", response_model=DatasetState, tags=["donnees"])
+def dataset_state() -> dict:
+    """Y a-t-il des donnees dans l'application ? L'interface s'en sert pour
+    choisir entre l'ecran de depot et la file d'attente."""
+    return _etat_du_jeu_de_donnees()
+
+
+@app.post("/api/dataset", response_model=DatasetState, tags=["donnees"])
+async def upload_dataset(
+    claims_file: UploadFile = File(..., description="CSV des declarations."),
+    policies_file: UploadFile = File(..., description="CSV des contrats."),
+) -> dict:
+    """Depose les deux fichiers d'entree.
+
+    Les deux vont ensemble et sont remplaces d'un bloc : une declaration sans
+    son contrat n'est pas exploitable, et accepter un fichier a la fois
+    laisserait l'application dans un etat incoherent.
+
+    Rien n'est ecrit sur le disque : le jeu de donnees vit en memoire dans le
+    processus (voir src/dataset.py).
+    """
+    def _decode(contenu: bytes, quel_fichier: str) -> str:
+        # tools.decode_csv est la source unique : la lecture disque (evals,
+        # terminal, tests) et le depot HTTP doivent accepter exactement les
+        # memes fichiers.
+        try:
+            return decode_csv(contenu)
+        except EncodageIllisible as e:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{quel_fichier} : {e} Enregistrez le fichier en UTF-8.",
+            ) from e
+
+    texte_claims = _decode(await claims_file.read(), "Fichier des declarations")
+    texte_policies = _decode(await policies_file.read(), "Fichier des contrats")
+
+    # AUCUN FILTRE SUR LE CONTENU, AUCUN SUR LE NOM DU FICHIER.
+    #
+    # Le seul refus possible ici est technique : un CSV illisible ou auquel il
+    # manque des colonnes (parse_*_csv). Ce que contiennent les lignes ne
+    # regarde pas l'API.
+    #
+    # Une version precedente inspectait le fichier pour reconnaitre le jeu
+    # d'essai de data/ et refusait le depot. C'etait une erreur : la regle du
+    # projet veut que le systeme n'aille JAMAIS chercher les fichiers de data/
+    # tout seul, pas qu'il inspecte ceux que l'utilisateur lui donne. Ces deux
+    # choses sont independantes, et la seconde revenait a decider a sa place
+    # ce qu'il a le droit de charger.
+    #
+    # Ce qui garantit que data/ ne s'affiche jamais tout seul, c'est
+    # _exiger_jeu_de_donnees (source="depot" obligatoire) et l'absence totale
+    # de repli dans tools._load_claims - pas une inspection du contenu.
+    try:
+        declarations = parse_claims_csv(texte_claims)
+        contrats = parse_policies_csv(texte_policies)
+    except InvalidDatasetFile as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+    # Le screening est memorise par claim_id : sans ce vidage, un nouveau
+    # fichier reutiliserait les verdicts calcules sur l'ancien.
+    guard.reset_screening_cache()
+    dataset.set_active(
+        declarations.lignes,
+        contrats.lignes,
+        source=dataset.SOURCE_DEPOT,
+        claims_filename=claims_file.filename or "",
+        policies_filename=policies_file.filename or "",
+        rejets=declarations.rejets + contrats.rejets,
+    )
+    return _etat_du_jeu_de_donnees()
+
+
+@app.delete("/api/dataset", response_model=DatasetState, tags=["donnees"])
+def clear_dataset() -> dict:
+    guard.reset_screening_cache()
+    dataset.clear()
+    return _etat_du_jeu_de_donnees()
+
+
+# =============================================================================
+# Endpoints gratuits (necessitent un jeu de donnees)
+# =============================================================================
+
 @app.get("/api/claims", response_model=list[ClaimSummary], tags=["referentiel"])
 def claims() -> list[dict]:
     """File d'attente. Joint quelques champs de la police pour que la liste
@@ -176,7 +348,14 @@ def claims() -> list[dict]:
     Les marqueurs d'injection sont calcules par guard.find_injection_markers,
     qui est une fonction pure : la file signale les dossiers a texte hostile
     sans depenser le moindre appel de modele.
+
+    Meme logique pour `urgence_estimee` : urgence.estimate_urgency est
+    deterministe et ne coute rien, ce qui permet d'ordonner la file avant
+    toute analyse. Ce n'est PAS la `priorite` que rend l'agent, et les deux
+    peuvent diverger sur un meme dossier (voir src/urgence.py).
     """
+    _exiger_jeu_de_donnees()
+
     summaries = []
     for claim_id in list_claim_ids():
         claim = _get_claim_or_404(claim_id)
@@ -186,6 +365,10 @@ def claims() -> list[dict]:
             # Un sinistre dont la police a disparu du CSV reste affichable :
             # la file ne doit pas tomber entierement pour une ligne isolee.
             policy = {}
+
+        # Calcules une seule fois : l'estimation d'urgence les relit.
+        markers = guard.find_injection_markers(claim.get("description_client", ""))
+        estimation = urgence.estimate_urgency(claim, markers)
 
         summaries.append(
             {
@@ -199,9 +382,9 @@ def claims() -> list[dict]:
                 "assure": policy.get("assure"),
                 "vehicule": policy.get("vehicule"),
                 "formule": policy.get("formule"),
-                "injection_markers_found": guard.find_injection_markers(
-                    claim.get("description_client", "")
-                ),
+                "injection_markers_found": markers,
+                "urgence_estimee": estimation["niveau"],
+                "urgence_motifs": estimation["motifs"],
             }
         )
     return summaries
@@ -215,12 +398,13 @@ def claim_detail(claim_id: str) -> dict:
     vaut alors None, ce que l'interface doit afficher comme une absence
     d'analyse et non comme un feu vert (voir guard.classify_client_text).
     """
+    _exiger_jeu_de_donnees()
     _get_claim_or_404(claim_id)  # 404 explicite avant tout le reste
 
     context = agent.build_context(claim_id, use_classifier=False)
     if "error" in context:
         # Le sinistre existe (verifie ci-dessus) : l'erreur restante ne peut
-        # venir que d'une police referencee mais absente de policies_auto.csv.
+        # venir que d'une police referencee mais absente du fichier des contrats.
         # C'est une incoherence de donnees, pas une URL erronee.
         raise HTTPException(status_code=422, detail=context["error"])
 
@@ -237,6 +421,7 @@ def claim_detail(claim_id: str) -> dict:
 
 @app.get("/api/policies/{policy_id}", response_model=Policy, tags=["referentiel"])
 def policy_detail(policy_id: str) -> dict:
+    _exiger_jeu_de_donnees()
     return _get_policy_or_404(policy_id)
 
 
@@ -269,6 +454,7 @@ async def screen(claim_id: str) -> dict:
     pour que le memo par claim_id soit renseigne : un triage lance ensuite sur
     le meme sinistre reutilisera ce verdict au lieu de repayer la couche [2].
     """
+    _exiger_jeu_de_donnees()
     claim = _get_claim_or_404(claim_id)
 
     _acquire_run_lock()
@@ -288,6 +474,7 @@ async def triage(claim_id: str) -> dict:
     tour d'outils (jusqu'a MAX_TOOL_TURNS), plus l'appel du filtre. Pour
     suivre la progression, utiliser plutot l'endpoint SSE ci-dessous.
     """
+    _exiger_jeu_de_donnees()
     _get_claim_or_404(claim_id)
 
     _acquire_run_lock()
@@ -353,6 +540,7 @@ async def triage_stream(
             "agentique complete et ne doit pas partir sur un prefetch.",
         )
 
+    _exiger_jeu_de_donnees()
     _get_claim_or_404(claim_id)
     _acquire_run_lock()
 

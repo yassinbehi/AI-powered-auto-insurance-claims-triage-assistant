@@ -22,16 +22,37 @@ export type Triage = (typeof TRIAGE_VALUES)[number];
 export const PRIORITE_VALUES = ["basse", "normale", "haute", "critique"] as const;
 export type Priorite = (typeof PRIORITE_VALUES)[number];
 
+/**
+ * Urgence estimee de la file, calculee par backend/src/urgence.py a partir des
+ * seules colonnes deja presentes dans la file.
+ *
+ * MEMES quatre valeurs que Priorite, et c'est volontaire : il n'y a qu'une
+ * echelle ordinale a apprendre dans ce produit. Ce n'est PAS la meme grandeur
+ * pour autant. La priorite est une conclusion du modele et n'existe qu'apres
+ * un triage ; l'urgence existe avant, gratuitement, et les deux peuvent
+ * diverger sur un meme dossier. Elles ne portent jamais les memes mots ni la
+ * meme forme a l'ecran : voir URGENCE_META dans lib/status.ts.
+ *
+ * La liste est dupliquee a dessein plutot que derivee de PRIORITE_VALUES :
+ * les deux echelles doivent pouvoir evoluer separement.
+ */
+export const URGENCE_VALUES = ["basse", "normale", "haute", "critique"] as const;
+export type Urgence = (typeof URGENCE_VALUES)[number];
+
 /** guard.ALLOWED_VERDICTS. `null` = couche [2] non executee, ce qui n'est PAS
  *  un verdict favorable. */
 export type Verdict = "SAFE" | "SUSPECT" | "INJECTION";
 
-export type TypeSinistre =
-  | "collision"
-  | "bris_glace"
-  | "vol"
-  | "incendie"
-  | "rc_tiers";
+/** Tableau et non simple union : le filtre de la file doit valider a
+ *  l'execution ce qui arrive de l'URL. */
+export const TYPE_SINISTRE_VALUES = [
+  "collision",
+  "bris_glace",
+  "vol",
+  "incendie",
+  "rc_tiers",
+] as const;
+export type TypeSinistre = (typeof TYPE_SINISTRE_VALUES)[number];
 
 /** tools.SIGNAL_NATURE */
 export type NatureSignal = "administratif" | "comportemental";
@@ -42,6 +63,43 @@ export type OuiNon = "oui" | "non";
 // =============================================================================
 // Referentiel
 // =============================================================================
+
+/**
+ * Etat du jeu de donnees depose par l'utilisateur.
+ *
+ * `loaded: false` signifie que l'application n'a AUCUNE donnee. Les fichiers
+ * du depot ne servent jamais de repli : ce sont les jeux d'essai des
+ * evaluations.
+ */
+/**
+ * Ligne d'un fichier depose qui n'a pas pu etre lue.
+ *
+ * Ces lignes etaient auparavant supprimees en silence : l'utilisateur
+ * travaillait sur un fichier ampute sans aucun moyen de l'apprendre. Le
+ * numero est celui du tableur, en-tete compris, pour que la correction soit
+ * immediate.
+ */
+export interface LigneRejetee {
+  /** "declarations" ou "contrats". */
+  fichier: string;
+  ligne: number;
+  /** claim_id / policy_id si lisible, sinon chaine vide. */
+  identifiant: string;
+  raison: string;
+}
+
+export interface DatasetState {
+  loaded: boolean;
+  claims_filename: string | null;
+  policies_filename: string | null;
+  claims_count: number | null;
+  policies_count: number | null;
+  loaded_at: string | null;
+  /** Declarations dont le contrat est absent du fichier des contrats. */
+  claims_sans_contrat: string[];
+  /** Lignes des deux fichiers qui n'ont pas pu etre lues. */
+  lignes_rejetees: LigneRejetee[];
+}
 
 export interface Policy {
   policy_id: string;
@@ -122,6 +180,12 @@ export interface ClaimSummary {
   vehicule: string | null;
   formule: string | null;
   injection_markers_found: string[];
+  /** Repere de lecture calcule cote Python. Voir URGENCE_VALUES ci-dessus :
+   *  ce n'est pas TriageOutput.priorite. */
+  urgence_estimee: Urgence;
+  /** Ensemble ferme cote Python (urgence.MOTIF_*), type large ici avec repli
+   *  sur humanize(), comme signaux_fraude. */
+  urgence_motifs: string[];
 }
 
 export interface ClaimDetail {

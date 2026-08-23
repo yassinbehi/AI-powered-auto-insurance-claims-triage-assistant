@@ -8,7 +8,7 @@
  * autorise donc l'origine du frontend via CORS.
  */
 
-import type { Rules, Screening } from "@/lib/types";
+import type { DatasetState, Rules, Screening } from "@/lib/types";
 
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
@@ -34,6 +34,41 @@ async function readDetail(response: Response): Promise<string> {
  */
 export function triageStreamUrl(claimId: string): string {
   return `${API_BASE_URL}/api/triage/${encodeURIComponent(claimId)}/stream?confirm=1`;
+}
+
+/**
+ * Depose les deux fichiers d'entree.
+ *
+ * Les deux partent ensemble : une declaration sans son contrat n'est pas
+ * exploitable, et l'API remplace le jeu de donnees d'un bloc.
+ */
+export async function uploadDataset(
+  claimsFile: File,
+  policiesFile: File,
+): Promise<DatasetState> {
+  const corps = new FormData();
+  corps.append("claims_file", claimsFile);
+  corps.append("policies_file", policiesFile);
+
+  const response = await fetch(`${API_BASE_URL}/api/dataset`, {
+    method: "POST",
+    body: corps,
+  });
+
+  if (!response.ok) {
+    // 422 = fichier inexploitable. Le message de l'API nomme les colonnes
+    // manquantes : il est utile tel quel a l'utilisateur.
+    throw new Error(await readDetail(response));
+  }
+  return response.json() as Promise<DatasetState>;
+}
+
+export async function clearDataset(): Promise<DatasetState> {
+  const response = await fetch(`${API_BASE_URL}/api/dataset`, { method: "DELETE" });
+  if (!response.ok) {
+    throw new Error(await readDetail(response));
+  }
+  return response.json() as Promise<DatasetState>;
 }
 
 /**
