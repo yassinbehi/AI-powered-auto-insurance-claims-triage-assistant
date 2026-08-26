@@ -195,11 +195,16 @@ def _get_policy_or_404(policy_id: str) -> dict:
         raise HTTPException(status_code=409, detail=_AUCUN_JEU_DE_DONNEES) from e
 
 
-def _screening_from(screened_claim: dict) -> dict:
+def _screening_from(screened_claim: dict, original_text: str = "") -> dict:
     """Extrait le bloc de trace du filtre et y joint le texte reellement
-    transmis au modele. `original_text` est desormais repris pour que
-    l'interface puisse le donner A LIRE au gestionnaire humain, sans jamais le
-    transmettre au modele (voir api_models.Screening)."""
+    transmis au modele.
+
+    `original_text` (le texte brut du client, pour LECTURE HUMAINE) est fourni
+    SEPAREMENT par l'appelant, jamais lu dans `screened_claim`. C'est
+    deliberement le cas : `screened_claim["_screening"]` est le meme dict que le
+    tool get_claim renvoie au modele (voir guard.screen_claim), donc y ranger le
+    texte brut le ferait fuiter dans le prompt. L'appelant le prend sur le claim
+    BRUT, hors de portee du modele."""
     trace = screened_claim.get("_screening", {})
     text_for_model = screened_claim.get("description_client", "")
     return {
@@ -208,7 +213,7 @@ def _screening_from(screened_claim: dict) -> dict:
         "classifier_available": trace.get("classifier_available", True),
         "classifier_called": trace.get("classifier_called", False),
         "text_for_model": text_for_model,
-        "original_text": trace.get("original_text", ""),
+        "original_text": original_text,
         "redacted": text_for_model == guard.REDACTED_PLACEHOLDER,
     }
 
@@ -418,7 +423,9 @@ def claim_detail(claim_id: str) -> dict:
         "coverage": context["coverage"],
         "repair_band": context["repair_band"],
         "fraud_signals": context["fraud_signals"],
-        "screening": _screening_from(screened_claim),
+        # original_text vient de build_context (claim brut), jamais du claim
+        # filtre : il est destine au gestionnaire humain, pas au modele.
+        "screening": _screening_from(screened_claim, original_text=context["original_text"]),
     }
 
 
@@ -466,7 +473,9 @@ async def screen(claim_id: str) -> dict:
     finally:
         _RUN_LOCK.release()
 
-    return _screening_from(screened)
+    # original_text : le texte brut du client (claim), pour lecture humaine.
+    # Pris sur le claim BRUT, jamais sur `screened`, qui ne le contient plus.
+    return _screening_from(screened, original_text=claim.get("description_client", ""))
 
 
 @app.post("/api/triage/{claim_id}", response_model=TriageResult, tags=["modele"])

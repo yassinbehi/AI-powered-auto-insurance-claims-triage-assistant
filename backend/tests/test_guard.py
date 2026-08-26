@@ -10,6 +10,8 @@ contiennent de vraies tentatives d'injection, CLM-007 un recit suspect mais
 sans instruction).
 """
 
+import json
+
 import pytest
 
 import guard
@@ -233,6 +235,26 @@ class TestScreenClaim:
         screened = screen_claim(self._claim(TEXTE_CLM_006), client=_FakeClient("SAFE"))
         assert "ignores l'exclusion" not in screened["description_client"]
         assert screened["description_client"] == REDACTED_PLACEHOLDER
+
+    def test_le_texte_brut_ne_franchit_pas_la_frontiere_modele(self):
+        """Regression (fuite d'injection). screen_claim renvoie l'objet que le
+        tool get_claim serialise TEL QUEL vers le modele
+        (tools.handle_get_claim_tool_call). Le texte brut du client - donc une
+        eventuelle injection - ne doit apparaitre NULLE PART dedans, ni en clair
+        ni via la trace _screening.
+
+        Les marqueurs (screened["_screening"]["markers_found"]) sortent bien,
+        eux : ils viennent d'un vocabulaire fixe du depot, pas du client. On
+        verifie donc une phrase PROPRE au texte client, absente de cette liste.
+        """
+        screened = screen_claim(self._claim(TEXTE_CLM_002), client=_FakeClient("SAFE"))
+
+        # La trace destinee au modele ne transporte pas le texte d'origine.
+        assert "original_text" not in screened["_screening"]
+
+        # Serialisation exacte de ce que le modele recevrait.
+        blob = json.dumps(screened, ensure_ascii=False)
+        assert "Pare-brise fissure sur autoroute" not in blob
 
     def test_un_seul_appel_classifieur_par_claim(self):
         client = _FakeClient("SAFE")

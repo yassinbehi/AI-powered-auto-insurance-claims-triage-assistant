@@ -433,15 +433,18 @@ def screen_claim(
 
     screened = dict(claim)
     screened["description_client"] = screening["text_for_model"]
+    # ATTENTION - FRONTIERE MODELE. Ce dict `_screening` est renvoye TEL QUEL au
+    # modele par le tool get_claim (tools.handle_get_claim_tool_call). Il ne doit
+    # donc contenir QUE des donnees insensibles : verdict, marqueurs (vocabulaire
+    # fixe du depot), drapeaux. Le texte brut du client (screening["original_text"])
+    # NE DOIT JAMAIS y figurer - il porterait l'injection qu'on cherche justement a
+    # tenir hors du prompt. Le gestionnaire humain le lit par un autre chemin :
+    # l'API le prend sur le claim BRUT, jamais ici (voir api._screening_from).
     screened["_screening"] = {
         "verdict": screening["verdict"],
         "markers_found": screening["markers_found"],
         "classifier_available": screening["classifier_available"],
         "classifier_called": screening["classifier_called"],
-        # Conserve dans la trace pour que l'API puisse le rendre LISIBLE par un
-        # gestionnaire humain (jamais par le modele : voir description_client,
-        # qui reste la version assainie/placeholder transmise au triage).
-        "original_text": screening["original_text"],
     }
     return screened
 

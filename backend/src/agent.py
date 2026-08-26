@@ -461,6 +461,11 @@ def build_context(claim_id: str, use_classifier: bool = True) -> dict:
         "coverage": coverage,
         "repair_band": repair_band,
         "fraud_signals": fraud_signals,
+        # Texte brut du client, pour LECTURE HUMAINE cote API uniquement. Sortir
+        # de build_context est sans risque : cette fonction n'alimente jamais le
+        # prompt de triage (le modele appelle les tools lui-meme). A ne PAS
+        # remettre dans `claim`, qui lui peut atteindre le modele via get_claim.
+        "original_text": claim.get("description_client", ""),
     }
 
 
