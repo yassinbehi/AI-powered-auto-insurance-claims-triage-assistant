@@ -61,9 +61,14 @@ function Avancement({ steps, termine }: { steps: ProgressStep[]; termine: boolea
 export function TriageRunView({
   claimId,
   brief,
+  messageSignale = false,
 }: {
   claimId: string;
   brief?: React.ReactNode;
+  /** Le message du client a ete ecarte du filtre. On le rappelle une fois
+   *  l'analyse terminee : le triage ne l'a pas lu, mais le gestionnaire peut le
+   *  relire (avec sa note) dans « Le sinistre en bref » ci-dessous. */
+  messageSignale?: boolean;
 }) {
   const { status, steps, output, error, start, cancel } = useTriageStream(claimId);
 
@@ -110,7 +115,9 @@ export function TriageRunView({
         </Alert>
       ) : null}
 
-      {output ? <TriageResultCard output={output} brief={brief} /> : null}
+      {output ? (
+        <TriageResultCard output={output} brief={brief} messageSignale={messageSignale} />
+      ) : null}
 
       {lance && !output ? (
         <Card>

@@ -1,6 +1,14 @@
 "use client";
 
-import { CircleCheck, CircleSlash, FileText, ListChecks, Mail, UserCheck } from "lucide-react";
+import {
+  CircleCheck,
+  CircleSlash,
+  FileText,
+  ListChecks,
+  Mail,
+  MessageSquareWarning,
+  UserCheck,
+} from "lucide-react";
 
 import { CopyButton } from "@/components/result/copy-button";
 import { ChipList } from "@/components/status/chip-list";
@@ -53,6 +61,18 @@ function BlocPrincipal({
   );
 }
 
+function MessageSignaleAlert({ signale }: { signale: boolean }) {
+  if (!signale) return null;
+
+  return (
+    <Alert variant="destructive">
+      <MessageSquareWarning aria-hidden="true" />
+      <AlertTitle>Le message du client a été signalé</AlertTitle>
+      <AlertDescription>Ce dossier contient un message qui a été écarté de l&apos;analyse.</AlertDescription>
+    </Alert>
+  );
+}
+
 function ValidationHumaine({ requise }: { requise: boolean }) {
   if (!requise) return null;
 
@@ -71,9 +91,13 @@ function ValidationHumaine({ requise }: { requise: boolean }) {
 export function TriageResultCard({
   output,
   brief,
+  messageSignale = false,
 }: {
   output: TriageOutput;
   brief?: React.ReactNode;
+  /** Le message du client a ete ecarte du filtre. Rappele en tete du resultat,
+   *  en rouge : le triage n'a pas travaille sur ce texte. */
+  messageSignale?: boolean;
 }) {
   const fourchette = output.fourchette_reparation_tnd;
 
@@ -88,6 +112,7 @@ export function TriageResultCard({
       </CardHeader>
 
       <CardContent className="space-y-5">
+        <MessageSignaleAlert signale={messageSignale} />
         <ValidationHumaine requise={output.validation_humaine_requise} />
 
         {brief ? (

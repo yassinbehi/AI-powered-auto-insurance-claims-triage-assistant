@@ -645,24 +645,27 @@ class TestScreeningExpose:
         assert screening["classifier_called"] is False
         assert screening["redacted"] is True
 
-    def test_texte_injecte_ne_sort_pas_de_l_api(self):
-        """Le texte redige par le client ne franchit pas la frontiere HTTP.
+    def test_texte_injecte_lisible_par_l_humain_mais_pas_par_le_modele(self):
+        """Le texte du client est expose pour LECTURE HUMAINE
+        (screening.original_text), mais ne franchit jamais la frontiere du
+        MODELE : text_for_model et description_client restent le placeholder.
 
-        A ne pas confondre avec `markers_found`, qui sort bien : ses entrees
+        A ne pas confondre avec `markers_found`, qui sort aussi : ses entrees
         proviennent de guard.INJECTION_MARKERS, un vocabulaire fixe du depot,
-        et non de ce que le client a ecrit. C'est la trace du filtre, et
-        l'interface a besoin de l'afficher.
+        et non de ce que le client a ecrit. C'est la trace du filtre.
         """
         body = client.get("/api/claims/CLM-002").json()
-        brut = json.dumps(body, ensure_ascii=False)
 
-        # Phrases propres a CLM-002 dans claims_auto.csv.
-        assert "Pare-brise fissure sur autoroute" not in brut
-        assert "sans verifier la police" not in brut
-        assert "original_text" not in brut
+        # Cote humain : le texte brut du client est lisible tel quel. Phrases
+        # propres a CLM-002 dans claims_auto.csv.
+        original = body["screening"]["original_text"]
+        assert "Pare-brise fissure sur autoroute" in original
+        assert "sans verifier la police" in original
 
-        # Ce qui reste visible : le placeholder et le vocabulaire du filtre.
+        # Cote modele : rien du texte brut ne transparait. Le triage ne voit
+        # que le placeholder, aussi bien dans le screening que dans le claim.
         assert body["screening"]["text_for_model"] == guard.REDACTED_PLACEHOLDER
+        assert body["claim"]["description_client"] == guard.REDACTED_PLACEHOLDER
         assert set(body["screening"]["markers_found"]) <= set(guard.INJECTION_MARKERS)
 
     def test_marqueurs_signales_dans_la_file(self):

@@ -6,7 +6,7 @@
  * triage n'existe qu'apres un passage de l'agent.
  */
 
-import { HeartPulse, Microscope, ShieldAlert } from "lucide-react";
+import { HeartPulse, Microscope } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -31,23 +31,6 @@ export function BlessureFlag() {
       <TooltipContent>
         Blessure déclarée : expertise requise et priorité critique
         (regles_sinistres.md).
-      </TooltipContent>
-    </Tooltip>
-  );
-}
-
-export function InjectionFlag() {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Badge variant="warning">
-          <ShieldAlert aria-hidden="true" />
-          Message signalé
-        </Badge>
-      </TooltipTrigger>
-      <TooltipContent className="max-w-xs">
-        Le message du client demande de contourner les règles de traitement. Il sera écarté de
-        l&apos;analyse.
       </TooltipContent>
     </Tooltip>
   );

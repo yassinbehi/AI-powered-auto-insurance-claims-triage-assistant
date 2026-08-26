@@ -18,12 +18,7 @@
 
 import Link from "next/link";
 
-import {
-  BlessureFlag,
-  InjectionFlag,
-  MontantCell,
-  UrgenceCell,
-} from "@/components/claims/claim-flags";
+import { BlessureFlag, MontantCell, UrgenceCell } from "@/components/claims/claim-flags";
 import { TypeSinistreBadge } from "@/components/status/domain-badges";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -39,17 +34,16 @@ import { FORMULE_LABEL, formatDate } from "@/lib/status";
 import type { ClaimSummary } from "@/lib/types";
 
 function Signalements({ claim }: { claim: ClaimSummary }) {
-  const aDesSignalements =
-    claim.blessure === "oui" || claim.injection_markers_found.length > 0;
-
-  if (!aDesSignalements) {
+  // Le message signale n'apparait plus ici : un message ecarte est une trace du
+  // filtre, pas un fait a traiter dans la file. Il est desormais montre, avec sa
+  // note, a cote du texte du client sur la fiche dossier (declaration-client.tsx).
+  if (claim.blessure !== "oui") {
     return <span className="text-sm text-muted-foreground">—</span>;
   }
 
   return (
     <div className="flex flex-wrap gap-1.5">
-      {claim.blessure === "oui" ? <BlessureFlag /> : null}
-      {claim.injection_markers_found.length > 0 ? <InjectionFlag /> : null}
+      <BlessureFlag />
     </div>
   );
 }

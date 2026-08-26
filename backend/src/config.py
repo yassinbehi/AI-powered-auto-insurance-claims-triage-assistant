@@ -36,6 +36,10 @@ load_dotenv(BACKEND_ROOT / ".env")
 # budget_tokens.md: "Modele par defaut: Claude Haiku 4.5."
 MODEL = "claude-haiku-4-5-20251001"
 MAX_TOKENS = 1500
+# Temperature 0 : on veut le triage le plus deterministe possible. Un meme
+# dossier doit produire le meme classement d'un appel a l'autre, aussi bien
+# pour le triage (agent.py) que pour le classifieur anti-injection (guard.py).
+TEMPERATURE = 0
 
 # ---------------------------------------------------------------------------
 # Agent loop limits

@@ -22,11 +22,13 @@ DEUX CHOIX EXPLICITES :
    projet cherche a rendre visibles. La sortie est donc transmise telle
    quelle, accompagnee de ses erreurs de validation.
 
-2. `Screening` n'expose JAMAIS `original_text`.
-   guard.classify_client_text conserve le texte client d'origine pour l'audit,
-   mais il ne franchit pas la frontiere HTTP : seul `text_for_model` sort,
-   c'est-a-dire exactement ce que le modele de triage a recu (assaini et
-   encadre, ou remplace par le placeholder si le verdict est INJECTION).
+2. `Screening` expose `original_text`, mais UNIQUEMENT pour lecture humaine.
+   guard.classify_client_text conserve le texte client d'origine ; il sort
+   maintenant par HTTP pour que l'interface puisse le donner A LIRE au
+   gestionnaire (rendu inerte par React, jamais interprete). Il ne franchit
+   JAMAIS la frontiere du modele : c'est `text_for_model` qui va au triage,
+   c'est-a-dire la version assainie et encadree, ou le placeholder si le
+   verdict est INJECTION. Lisible par l'humain, invisible pour le modele.
 """
 
 from typing import Any, Literal, Optional
@@ -91,6 +93,9 @@ class Screening(BaseModel):
     classifier_available: bool = True
     classifier_called: bool = False
     text_for_model: str = ""
+    # Texte brut du client, expose pour lecture HUMAINE uniquement (voir le
+    # choix 2 du module). Le modele ne voit que `text_for_model`.
+    original_text: str = ""
     redacted: bool = False
 
 

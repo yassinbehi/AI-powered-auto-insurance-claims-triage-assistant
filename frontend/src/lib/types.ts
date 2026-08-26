@@ -118,8 +118,10 @@ export interface Claim {
   policy_id: string;
   date_sinistre: string;
   type_sinistre: TypeSinistre;
-  /** Version filtree (assainie et encadree, ou remplacee par le placeholder).
-   *  Le texte brut du client ne franchit jamais la frontiere HTTP. */
+  /** Version filtree (assainie et encadree, ou remplacee par le placeholder) :
+   *  c'est ce que le MODELE recoit. Le texte brut du client n'arrive jamais
+   *  ici ; il ne traverse HTTP que via Screening.original_text, pour lecture
+   *  humaine. */
   description_client: string;
   blessure: OuiNon;
   constat: OuiNon;
@@ -135,6 +137,11 @@ export interface Screening {
   classifier_available: boolean;
   classifier_called: boolean;
   text_for_model: string;
+  /** Texte brut du client, expose pour LECTURE HUMAINE uniquement. Rendu
+   *  inerte par React (jamais dangerouslySetInnerHTML) : un gestionnaire peut
+   *  le lire, mais le modele ne recoit que `text_for_model` (assaini/encadre,
+   *  ou placeholder si le message a ete ecarte). Voir api_models.Screening. */
+  original_text: string;
   redacted: boolean;
 }
 

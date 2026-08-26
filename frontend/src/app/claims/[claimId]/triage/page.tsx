@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 
 import { ClaimBrief } from "@/components/claims/claim-brief";
+import { messageEstSignale } from "@/components/claims/declaration-client";
 import { PageContainer, PageHeader } from "@/components/layout/page-container";
 import { TypeSinistreBadge } from "@/components/status/domain-badges";
 import { TriageRunView } from "@/components/triage/triage-run-view";
@@ -68,6 +69,7 @@ export default async function TriagePage({ params }: PageProps<"/claims/[claimId
 
       <TriageRunView
         claimId={claim.claim_id}
+        messageSignale={messageEstSignale(screening)}
         brief={<ClaimBrief claim={claim} policy={policy} screening={screening} />}
       />
     </PageContainer>

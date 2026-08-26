@@ -2,7 +2,7 @@ import { Play } from "lucide-react";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 
-import { BlessureFlag, InjectionFlag } from "@/components/claims/claim-flags";
+import { BlessureFlag } from "@/components/claims/claim-flags";
 import { ClientMessagePanel } from "@/components/claims/client-message-panel";
 import { DeterministicAnalysis } from "@/components/claims/deterministic-analysis";
 import { ClaimFactsPanel, PolicyPanel } from "@/components/claims/policy-panel";
@@ -56,7 +56,6 @@ export default async function FicheDossierPage({
           <>
             <TypeSinistreBadge type={claim.type_sinistre} />
             {claim.blessure === "oui" ? <BlessureFlag /> : null}
-            {screening.markers_found.length > 0 ? <InjectionFlag /> : null}
           </>
         }
         title={<span className="font-mono">{claim.claim_id}</span>}

@@ -64,7 +64,7 @@ from typing import Optional
 import anthropic
 
 import cost
-from config import MAX_RETRIES, MODEL, RETRY_BASE_DELAY_SECONDS
+from config import MAX_RETRIES, MODEL, RETRY_BASE_DELAY_SECONDS, TEMPERATURE
 
 
 # =============================================================================
@@ -208,6 +208,7 @@ def _call_classifier(text: str, client: anthropic.Anthropic) -> tuple:
             message = client.messages.create(
                 model=MODEL,
                 max_tokens=8,
+                temperature=TEMPERATURE,
                 system=_CLASSIFIER_SYSTEM_PROMPT,
                 messages=[
                     {
@@ -437,6 +438,10 @@ def screen_claim(
         "markers_found": screening["markers_found"],
         "classifier_available": screening["classifier_available"],
         "classifier_called": screening["classifier_called"],
+        # Conserve dans la trace pour que l'API puisse le rendre LISIBLE par un
+        # gestionnaire humain (jamais par le modele : voir description_client,
+        # qui reste la version assainie/placeholder transmise au triage).
+        "original_text": screening["original_text"],
     }
     return screened
 

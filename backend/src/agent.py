@@ -62,6 +62,7 @@ from config import (
     REGLES_SINISTRES_FILE,
     RETRY_BASE_DELAY_SECONDS,
     SYSTEM_PROMPT_PATH,
+    TEMPERATURE,
 )
 from tools import (
     GET_POLICY_TOOL_SCHEMA,
@@ -283,6 +284,7 @@ def triage_claim(
             on_event=on_event,
             model=MODEL,
             max_tokens=MAX_TOKENS,
+            temperature=TEMPERATURE,
             system=system_blocks,
             tools=cached_tools,
             messages=messages,

@@ -197,7 +197,9 @@ def _get_policy_or_404(policy_id: str) -> dict:
 
 def _screening_from(screened_claim: dict) -> dict:
     """Extrait le bloc de trace du filtre et y joint le texte reellement
-    transmis au modele. `original_text` n'est jamais repris (api_models.py)."""
+    transmis au modele. `original_text` est desormais repris pour que
+    l'interface puisse le donner A LIRE au gestionnaire humain, sans jamais le
+    transmettre au modele (voir api_models.Screening)."""
     trace = screened_claim.get("_screening", {})
     text_for_model = screened_claim.get("description_client", "")
     return {
@@ -206,6 +208,7 @@ def _screening_from(screened_claim: dict) -> dict:
         "classifier_available": trace.get("classifier_available", True),
         "classifier_called": trace.get("classifier_called", False),
         "text_for_model": text_for_model,
+        "original_text": trace.get("original_text", ""),
         "redacted": text_for_model == guard.REDACTED_PLACEHOLDER,
     }
 
