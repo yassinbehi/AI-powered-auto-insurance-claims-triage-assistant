@@ -108,6 +108,12 @@ async def lifespan(_app: FastAPI):
     silencieuse si rien n'est enregistre : l'ecran de depot reste le point de
     depart d'une premiere utilisation.
     """
+    # Rattrapage des analyses enregistrees avant que l'historique ne retienne
+    # le nom de l'assure : sans lui, elles resteraient introuvables par nom.
+    completees = analyses_db.completer_assures()
+    if completees:
+        print(f"[analyses] {completees} analyse(s) completee(s) du nom de l'assure")
+
     if dataset.restore_from_db():
         etat = dataset.summary()
         print(

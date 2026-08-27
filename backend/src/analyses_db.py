@@ -178,6 +178,77 @@ def supprimer(analyse_id: int) -> bool:
         conn.close()
 
 
+def completer_assures() -> int:
+    """Renseigne l'assure des analyses qui n'en ont pas. Renvoie le nombre de
+    lignes completees.
+
+    RATTRAPAGE, pas une regle permanente : les analyses enregistrees avant
+    l'ajout de la colonne `assure` sont arrivees avec un nom vide, et
+    l'historique ne se cherchait donc pas par nom pour elles. Leur jeu de
+    donnees est souvent encore la : le contrat s'y retrouve, et le nom avec.
+
+    Ne touche que les lignes VIDES, et seulement celles dont le jeu existe
+    encore. Une analyse dont le jeu a ete supprime garde son nom vide - il
+    n'est plus nulle part. Idempotente : une fois completee, une ligne n'est
+    plus candidate.
+    """
+    try:
+        conn = dataset_db.ouvrir()
+    except sqlite3.Error as e:
+        dataset_db._avertir(f"completion des assures impossible ({type(e).__name__}: {e}).")
+        return 0
+    try:
+        candidates = conn.execute(
+            "SELECT id, claim_id, dataset_id FROM analyses "
+            "WHERE (assure IS NULL OR assure = '') AND dataset_id IS NOT NULL"
+        ).fetchall()
+    except sqlite3.Error as e:
+        dataset_db._avertir(f"completion des assures impossible ({type(e).__name__}: {e}).")
+        return 0
+    finally:
+        conn.close()
+
+    if not candidates:
+        return 0
+
+    # Un chargement par jeu, et non un par analyse : plusieurs analyses
+    # partagent le meme jeu, et le relire a chaque fois serait du gaspillage.
+    # La connexion ci-dessus est refermee avant, car dataset_db.load() ouvre
+    # la sienne.
+    noms_par_jeu: dict = {}
+    for jeu_id in {row["dataset_id"] for row in candidates}:
+        enregistre = dataset_db.load(jeu_id)
+        if enregistre is None:
+            continue
+        policies = enregistre["policies"]
+        noms_par_jeu[jeu_id] = {
+            claim_id: str(policies.get(claim.get("policy_id"), {}).get("assure") or "")
+            for claim_id, claim in enregistre["claims"].items()
+        }
+
+    corrections = [
+        (nom, row["id"])
+        for row in candidates
+        if (nom := noms_par_jeu.get(row["dataset_id"], {}).get(row["claim_id"], ""))
+    ]
+    if not corrections:
+        return 0
+
+    try:
+        conn = dataset_db.ouvrir()
+    except sqlite3.Error:
+        return 0
+    try:
+        with conn:
+            conn.executemany("UPDATE analyses SET assure = ? WHERE id = ?", corrections)
+        return len(corrections)
+    except sqlite3.Error as e:
+        dataset_db._avertir(f"completion des assures impossible ({type(e).__name__}: {e}).")
+        return 0
+    finally:
+        conn.close()
+
+
 def total_cout_usd() -> float:
     """Somme des couts enregistres. Contrairement au compteur du bandeau, qui
     vit dans le navigateur, celle-ci vaut pour toute la machine."""

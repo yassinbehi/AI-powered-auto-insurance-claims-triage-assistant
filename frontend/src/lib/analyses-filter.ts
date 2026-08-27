@@ -86,7 +86,10 @@ export function filtrerAnalyses(analyses: AnalyseResume[], q: string): AnalyseRe
 // Tri
 // =============================================================================
 
-export const TRI_CHAMPS = ["date", "cout", "dossier", "jeu"] as const;
+// Pas de tri par cout : il ne s'affiche plus dans cet historique (voir
+// analyses-table.tsx), et proposer de trier sur une colonne absente n'aurait
+// aucun sens a l'ecran.
+export const TRI_CHAMPS = ["date", "dossier", "assure", "jeu"] as const;
 export type TriChampAnalyse = (typeof TRI_CHAMPS)[number];
 export type TriSens = "asc" | "desc";
 
@@ -113,10 +116,12 @@ function comparer(a: AnalyseResume, b: AnalyseResume, champ: TriChampAnalyse): n
       // format et dans le meme fuseau : la comparaison lexicographique suffit,
       // sans construire deux objets Date par comparaison.
       return a.analyse_le < b.analyse_le ? -1 : a.analyse_le > b.analyse_le ? 1 : 0;
-    case "cout":
-      return a.cost_usd - b.cost_usd;
     case "dossier":
       return a.claim_id.localeCompare(b.claim_id, "fr");
+    case "assure":
+      // Les analyses sans nom (enregistrees avant que l'historique ne le
+      // retienne) se rangent ensemble, du cote des chaines vides.
+      return a.assure.localeCompare(b.assure, "fr");
     case "jeu":
       return a.dataset_nom.localeCompare(b.dataset_nom, "fr");
   }

@@ -222,6 +222,56 @@ class TestNomDeLAssure:
             dataset_db.use_path(precedent)
 
 
+class TestCompletionDesAssures:
+    """Rattrapage des analyses enregistrees avant que l'historique ne retienne
+    le nom de l'assure."""
+
+    @staticmethod
+    def _jeu_avec_contrat():
+        dataset.set_active(
+            {"CLM-001": {"claim_id": "CLM-001", "policy_id": "POL-002"}},
+            {"POL-002": {"policy_id": "POL-002", "assure": "Youssef Trabelsi"}},
+            source=dataset.SOURCE_DEPOT,
+            nom="Sinistres juillet",
+        )
+        return dataset.summary()["dataset_id"]
+
+    def test_une_analyse_sans_nom_est_completee(self):
+        jeu = self._jeu_avec_contrat()
+        analyses_db.enregistrer(_REUSSITE, dataset_id=jeu, dataset_nom="Sinistres juillet")
+        assert analyses_db.liste()[0]["assure"] == ""
+
+        assert analyses_db.completer_assures() == 1
+        assert analyses_db.liste()[0]["assure"] == "Youssef Trabelsi"
+
+    def test_elle_ne_se_rejoue_pas(self):
+        """Idempotente : une ligne completee n'est plus candidate."""
+        jeu = self._jeu_avec_contrat()
+        analyses_db.enregistrer(_REUSSITE, dataset_id=jeu, dataset_nom="Sinistres juillet")
+        analyses_db.completer_assures()
+        assert analyses_db.completer_assures() == 0
+
+    def test_un_nom_deja_present_n_est_pas_ecrase(self):
+        jeu = self._jeu_avec_contrat()
+        analyses_db.enregistrer(
+            _REUSSITE, dataset_id=jeu, dataset_nom="Sinistres juillet", assure="Nom saisi"
+        )
+        assert analyses_db.completer_assures() == 0
+        assert analyses_db.liste()[0]["assure"] == "Nom saisi"
+
+    def test_une_analyse_dont_le_jeu_a_disparu_reste_sans_nom(self):
+        """Le contrat n'existe plus nulle part : il n'y a rien a retrouver."""
+        jeu = self._jeu_avec_contrat()
+        analyses_db.enregistrer(_REUSSITE, dataset_id=jeu, dataset_nom="Sinistres juillet")
+        dataset.supprimer(jeu)
+
+        assert analyses_db.completer_assures() == 0
+        assert analyses_db.liste()[0]["assure"] == ""
+
+    def test_sans_analyse_a_completer(self):
+        assert analyses_db.completer_assures() == 0
+
+
 class TestArchivageParLApi:
     """api._archiver est le point de couture entre le triage et l'historique :
     c'est lui qui tourne a la fin des DEUX chemins de triage (bloquant et

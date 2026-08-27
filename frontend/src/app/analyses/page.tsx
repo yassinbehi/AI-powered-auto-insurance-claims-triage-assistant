@@ -5,7 +5,6 @@ import { AnalysesTable } from "@/components/analyses/analyses-table";
 import { PageContainer, PageHeader } from "@/components/layout/page-container";
 import { filtrerAnalyses, lireRecherche, lireTri, trierAnalyses } from "@/lib/analyses-filter";
 import { fetchAnalyses } from "@/lib/api-server";
-import { formatUsd } from "@/lib/status";
 
 /**
  * Les cas deja analyses.
@@ -43,10 +42,6 @@ export default async function AnalysesPage({ searchParams }: PageProps<"/analyse
   const tri = lireTri(params);
   const visibles = trierAnalyses(filtrerAnalyses(analyses, q), tri);
 
-  // Le cout affiche suit la recherche : filtrer pour ne voir qu'un jeu de
-  // donnees doit repondre "et combien celui-la a-t-il coute ?".
-  const total = visibles.reduce((somme, a) => somme + a.cost_usd, 0);
-
   return (
     <PageContainer className="space-y-6">
       <PageHeader
@@ -67,13 +62,8 @@ export default async function AnalysesPage({ searchParams }: PageProps<"/analyse
                 : `${analyses.length} analyse${analyses.length > 1 ? "s" : ""} conservée${
                     analyses.length > 1 ? "s" : ""
                   }. `}
-              {visibles.length > 0 ? (
-                <>
-                  Coût{q !== "" ? " de cette sélection" : " total"} :{" "}
-                  <span className="font-mono tabular-nums">{formatUsd(total)}</span>.{" "}
-                </>
-              ) : null}
-              Ouvrez une ligne pour relire la conclusion.
+              Cherchez par assuré, par dossier ou par conclusion, puis ouvrez une
+              ligne pour la relire.
             </span>
           )
         }

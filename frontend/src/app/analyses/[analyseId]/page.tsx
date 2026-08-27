@@ -9,7 +9,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { ApiNotFoundError, fetchAnalyse } from "@/lib/api-server";
-import { formatDateHeure, formatUsd } from "@/lib/status";
+import { formatDateHeure } from "@/lib/status";
 
 /**
  * Une analyse conservee, relue.
@@ -19,8 +19,8 @@ import { formatDateHeure, formatUsd } from "@/lib/status";
  * exactement comme le jour ou elle a ete produite, sans avoir a retrouver ses
  * reperes dans une seconde presentation.
  *
- * Ce qui s'y ajoute est ce que le direct n'avait pas besoin de dire : quand,
- * sur quel jeu de donnees, avec quel modele, et pour quel cout.
+ * Ce qui s'y ajoute est ce que le direct n'avait pas besoin de dire : pour
+ * qui, quand, sur quel jeu de donnees et avec quel modele.
  */
 
 export const dynamic = "force-dynamic";
@@ -30,12 +30,13 @@ function Metadonnees({
 }: {
   analyse: Awaited<ReturnType<typeof fetchAnalyse>>;
 }) {
+  // Pas de cout ici non plus : voir analyses-table.tsx. Il reste enregistre,
+  // et le compteur cumule du bandeau continue de le montrer.
   const lignes = [
     ["Assuré", analyse.assure || "—"],
     ["Analysé le", formatDateHeure(analyse.analyse_le)],
     ["Jeu de données", analyse.dataset_nom || "—"],
     ["Modèle", analyse.model || "—"],
-    ["Coût", formatUsd(analyse.cost_usd)],
   ] as const;
 
   return (

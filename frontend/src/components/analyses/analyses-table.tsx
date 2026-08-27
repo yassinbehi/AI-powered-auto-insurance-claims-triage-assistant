@@ -5,13 +5,17 @@
  * cartes en dessous. Un tableau a six colonnes retreci sur un telephone
  * devient illisible.
  *
- * Ce que cet ecran doit repondre, dans l'ordre : quand, quel dossier, quelle
- * conclusion, et ce que ca a coute. Le modele utilise vient en dernier - il
- * n'interesse que si l'on compare deux analyses du meme dossier.
+ * Ce que cet ecran doit repondre, dans l'ordre : quand, quel dossier, pour
+ * QUI, et quelle conclusion.
  *
- * LES ECHECS Y FIGURENT, avec leur cout. Une analyse interrompue a ete
- * facturee comme une autre, et un historique qui ne montrerait que les
- * reussites donnerait une image fausse de la depense.
+ * PAS DE COUT ICI. Il reste enregistre pour chaque analyse, mais un
+ * historique de dossiers traites n'est pas un releve de depenses : afficher
+ * un montant a chaque ligne mettait au premier plan une preoccupation qui
+ * n'est pas celle du gestionnaire quand il relit son travail. Le compteur
+ * cumule du bandeau reste, lui, a sa place.
+ *
+ * LES ECHECS Y FIGURENT. Une analyse interrompue fait partie de ce qui a ete
+ * tente sur un dossier, et la masquer donnerait une image fausse.
  */
 
 import { TriangleAlert } from "lucide-react";
@@ -31,7 +35,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { TriAnalyses } from "@/lib/analyses-filter";
-import { formatDateHeure, formatUsd } from "@/lib/status";
+import { formatDateHeure } from "@/lib/status";
 import type { AnalyseResume } from "@/lib/types";
 
 /** Conclusion de l'analyse, ou la raison de son echec. */
@@ -116,12 +120,12 @@ export function AnalysesTable({
                 <SortHeader champ="dossier" label="Dossier" tri={tri} />
               </TableHead>
               <TableHead>
+                <SortHeader champ="assure" label="Assuré" tri={tri} />
+              </TableHead>
+              <TableHead>
                 <SortHeader champ="jeu" label="Jeu de données" tri={tri} />
               </TableHead>
               <TableHead>Conclusion</TableHead>
-              <TableHead className="text-right">
-                <SortHeader champ="cout" label="Coût" tri={tri} align="right" />
-              </TableHead>
               <TableHead className="w-24" />
             </TableRow>
           </TableHeader>
@@ -131,24 +135,19 @@ export function AnalysesTable({
                 <TableCell className="whitespace-nowrap text-muted-foreground">
                   {formatDateHeure(analyse.analyse_le)}
                 </TableCell>
-                {/* L'assure sous l'identifiant, comme dans la file : c'est
-                    le nom qu'on reconnait, le code n'est qu'une reference. */}
-                <TableCell className="font-medium">
-                  <span className="block">{analyse.claim_id}</span>
-                  {analyse.assure ? (
-                    <span className="block truncate text-xs font-normal text-muted-foreground">
-                      {analyse.assure}
-                    </span>
-                  ) : null}
+                <TableCell className="font-medium">{analyse.claim_id}</TableCell>
+                {/* Colonne a part entiere, et triable : c'est le nom qu'on
+                    reconnait, l'identifiant n'est qu'une reference. Le tiret
+                    marque les analyses d'avant, pour lesquelles aucun nom
+                    n'avait ete retenu. */}
+                <TableCell className="max-w-[14rem] truncate">
+                  {analyse.assure || <span className="text-muted-foreground">—</span>}
                 </TableCell>
                 <TableCell className="max-w-[14rem] truncate text-muted-foreground">
                   {analyse.dataset_nom || "—"}
                 </TableCell>
                 <TableCell>
                   <Conclusion analyse={analyse} />
-                </TableCell>
-                <TableCell className="text-right font-mono tabular-nums text-muted-foreground">
-                  {formatUsd(analyse.cost_usd)}
                 </TableCell>
                 <TableCell className="text-right">
                   <Button asChild variant="ghost" size="sm">
@@ -166,24 +165,14 @@ export function AnalysesTable({
           <li key={analyse.id}>
             <Card>
               <CardContent className="space-y-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="font-medium">
-                      {analyse.claim_id}
-                      {analyse.assure ? (
-                        <span className="font-normal text-muted-foreground">
-                          {" · "}
-                          {analyse.assure}
-                        </span>
-                      ) : null}
-                    </p>
-                    <p className="truncate text-xs text-muted-foreground">
-                      {formatDateHeure(analyse.analyse_le)} · {analyse.dataset_nom || "—"}
-                    </p>
-                  </div>
-                  <span className="shrink-0 font-mono text-sm tabular-nums text-muted-foreground">
-                    {formatUsd(analyse.cost_usd)}
-                  </span>
+                <div className="min-w-0">
+                  <p className="truncate font-medium">
+                    {analyse.assure || analyse.claim_id}
+                  </p>
+                  <p className="truncate text-xs text-muted-foreground">
+                    {analyse.assure ? `${analyse.claim_id} · ` : ""}
+                    {formatDateHeure(analyse.analyse_le)} · {analyse.dataset_nom || "—"}
+                  </p>
                 </div>
                 <Conclusion analyse={analyse} />
                 <Button asChild variant="outline" size="sm" className="w-full">
