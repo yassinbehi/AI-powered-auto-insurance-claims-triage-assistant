@@ -10,6 +10,8 @@
  */
 
 import type {
+  AnalyseDetail,
+  AnalyseResume,
   ClaimDetail,
   ClaimSummary,
   DatasetResume,
@@ -78,6 +80,16 @@ export function fetchDatasetState() {
  *  la liste est la des le premier affichage, sans appel depuis le navigateur. */
 export function fetchDatasets() {
   return get<DatasetResume[]>("/api/datasets");
+}
+
+/** L'historique des analyses, la plus recente d'abord. */
+export function fetchAnalyses() {
+  return get<AnalyseResume[]>("/api/analyses");
+}
+
+/** Une analyse conservee. Leve ApiNotFoundError si l'identifiant est inconnu. */
+export function fetchAnalyse(id: number) {
+  return get<AnalyseDetail>(`/api/analyses/${id}`);
 }
 
 export function fetchClaims() {

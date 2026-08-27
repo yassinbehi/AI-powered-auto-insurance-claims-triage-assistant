@@ -290,6 +290,34 @@ export interface TriageResult {
   cost_usd: number;
 }
 
+/**
+ * Une ligne de l'historique des analyses (GET /api/analyses).
+ *
+ * `triage` et `priorite` sont `null` quand l'analyse n'a pas abouti ;
+ * `erreur` porte alors le motif. Les echecs sont conserves comme les
+ * reussites : ils ont ete facturees.
+ */
+export interface AnalyseResume {
+  id: number;
+  claim_id: string;
+  /** `null` si le jeu de donnees d'origine a ete supprime depuis. */
+  dataset_id: number | null;
+  /** Recopie a l'enregistrement, donc toujours lisible. */
+  dataset_nom: string;
+  analyse_le: string;
+  model: string;
+  cost_usd: number;
+  triage: Triage | null;
+  priorite: Priorite | null;
+  erreur: string | null;
+}
+
+/** Une analyse conservee, avec le contrat de sortie produit par le modele. */
+export interface AnalyseDetail extends AnalyseResume {
+  output: TriageOutput | null;
+  validation_errors: string[];
+}
+
 export interface RulesDocument {
   name: string;
   content: string;

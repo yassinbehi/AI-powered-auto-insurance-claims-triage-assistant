@@ -8,7 +8,7 @@
  * autorise donc l'origine du frontend via CORS.
  */
 
-import type { DatasetResume, DatasetState, Rules, Screening } from "@/lib/types";
+import type { AnalyseResume, DatasetResume, DatasetState, Rules, Screening } from "@/lib/types";
 
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
@@ -115,6 +115,15 @@ export async function deleteDataset(id: number): Promise<DatasetResume[]> {
     throw new Error(await readDetail(response));
   }
   return response.json() as Promise<DatasetResume[]>;
+}
+
+/** Retire une analyse de l'historique. Renvoie la liste restante. */
+export async function deleteAnalyse(id: number): Promise<AnalyseResume[]> {
+  const response = await fetch(`${API_BASE_URL}/api/analyses/${id}`, { method: "DELETE" });
+  if (!response.ok) {
+    throw new Error(await readDetail(response));
+  }
+  return response.json() as Promise<AnalyseResume[]>;
 }
 
 /**

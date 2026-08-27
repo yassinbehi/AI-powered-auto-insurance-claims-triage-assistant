@@ -211,6 +211,39 @@ export function formatTnd(amount: number): string {
   return `${NUMBER_FORMAT.format(amount)} TND`;
 }
 
+/**
+ * Date ET heure, pour un horodatage complet (ISO 8601 avec fuseau).
+ *
+ * Distincte de formatDate, qui recoit une date SEULE (`2026-07-18`) venue des
+ * fichiers deposes et lui ajoute une heure de minuit. Passer un horodatage
+ * complet a formatDate donnerait une date invalide.
+ */
+export function formatDateHeure(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  return new Intl.DateTimeFormat("fr-FR", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
+}
+
+/**
+ * Un cout en dollars. Quatre decimales, comme les rapports du backend
+ * (`[cost] $0.0043`) : une analyse coute quelques milliemes de dollar, et deux
+ * decimales afficheraient "0,00 $US" tant que le total n'a pas depasse le
+ * demi-centime.
+ */
+const FORMAT_USD = new Intl.NumberFormat("fr-FR", {
+  style: "currency",
+  currency: "USD",
+  minimumFractionDigits: 4,
+  maximumFractionDigits: 4,
+});
+
+export function formatUsd(usd: number): string {
+  return FORMAT_USD.format(usd);
+}
+
 export function formatDate(iso: string): string {
   const date = new Date(`${iso}T00:00:00`);
   if (Number.isNaN(date.getTime())) return iso;

@@ -266,6 +266,35 @@ class LigneRejetee(BaseModel):
     raison: str
 
 
+class AnalyseResume(BaseModel):
+    """Une ligne de l'historique (GET /api/analyses).
+
+    `triage` et `priorite` sont a None quand l'analyse n'a pas abouti ;
+    `erreur` porte alors le motif. Les echecs figurent dans l'historique au
+    meme titre que les reussites : ils ont ete factures.
+    """
+
+    id: int
+    claim_id: str
+    #: None si le jeu de donnees d'origine a ete supprime depuis.
+    dataset_id: Optional[int] = None
+    #: Recopie a l'enregistrement, donc toujours lisible meme apres suppression.
+    dataset_nom: str
+    analyse_le: str
+    model: str
+    cost_usd: float
+    triage: Optional[str] = None
+    priorite: Optional[str] = None
+    erreur: Optional[str] = None
+
+
+class AnalyseDetail(AnalyseResume):
+    """Une analyse conservee, avec le contrat de sortie produit par le modele."""
+
+    output: Optional[dict[str, Any]] = None
+    validation_errors: list[str] = Field(default_factory=list)
+
+
 class DatasetResume(BaseModel):
     """Une ligne de la liste des jeux enregistres (GET /api/datasets).
 

@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 export function AppHeader() {
   const pathname = usePathname();
   const surFile = pathname === "/";
+  const surAnalyses = pathname.startsWith("/analyses");
 
   return (
     <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
@@ -37,7 +38,9 @@ export function AppHeader() {
           <span className="sr-only">— retour à la file d&apos;attente</span>
         </Link>
 
-        <nav className="ml-2 hidden sm:block">
+        {/* Les deux temps du travail, dans l'ordre : ce qu'il reste a traiter,
+            puis ce qui l'a ete. */}
+        <nav className="ml-2 hidden items-center gap-1 sm:flex">
           <Link
             href="/"
             aria-current={surFile ? "page" : undefined}
@@ -49,6 +52,16 @@ export function AppHeader() {
             )}
           >
             File d&apos;attente
+          </Link>
+          <Link
+            href="/analyses"
+            aria-current={surAnalyses ? "page" : undefined}
+            className={cn(
+              "rounded-md px-2 py-1 text-sm transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+              surAnalyses ? "text-foreground" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            Analyses
           </Link>
         </nav>
 

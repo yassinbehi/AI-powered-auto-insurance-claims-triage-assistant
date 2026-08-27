@@ -64,11 +64,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 import agent
+import analyses_db
 import dataset
 import dataset_db
 import guard
 import urgence
 from api_models import (
+    AnalyseDetail,
+    AnalyseResume,
     ClaimDetail,
     ClaimSummary,
     DatasetResume,
@@ -605,6 +608,56 @@ def list_models() -> list[dict]:
     ]
 
 
+def _archiver(resultat: dict) -> None:
+    """Range une analyse terminee dans l'historique (src/analyses_db.py).
+
+    Appelee sur les DEUX chemins de triage, et sur les echecs comme sur les
+    reussites : une analyse interrompue a ete facturee, et un historique qui
+    ne montrerait que les reussites donnerait une image fausse de la depense.
+
+    Le jeu de donnees est lu ICI plutot que passe en argument : c'est le
+    moment ou il est encore celui qui a servi a l'analyse.
+    """
+    etat = dataset.summary()
+    analyses_db.enregistrer(
+        resultat,
+        dataset_id=etat.get("dataset_id"),
+        dataset_nom=etat.get("nom") or "",
+    )
+
+
+@app.get("/api/analyses", response_model=list[AnalyseResume], tags=["historique"])
+def list_analyses() -> list:
+    """Les analyses deja produites, la plus recente d'abord.
+
+    Sans leur contrat de sortie : un tableau n'a pas besoin de cinquante
+    contrats complets pour afficher cinquante lignes.
+    """
+    return analyses_db.liste()
+
+
+@app.get("/api/analyses/{analyse_id}", response_model=AnalyseDetail, tags=["historique"])
+def analyse_detail(analyse_id: int = Path(..., ge=1)) -> dict:
+    """Une analyse conservee, contrat de sortie compris."""
+    detail = analyses_db.get(analyse_id)
+    if detail is None:
+        raise HTTPException(
+            status_code=404, detail=f"Aucune analyse n'a l'identifiant {analyse_id}."
+        )
+    return detail
+
+
+@app.delete("/api/analyses/{analyse_id}", response_model=list[AnalyseResume], tags=["historique"])
+def delete_analyse(analyse_id: int = Path(..., ge=1)) -> list:
+    """Retire une analyse de l'historique. Renvoie la liste restante, pour que
+    l'interface se remette a jour d'un seul aller-retour."""
+    if not analyses_db.supprimer(analyse_id):
+        raise HTTPException(
+            status_code=404, detail=f"Aucune analyse n'a l'identifiant {analyse_id}."
+        )
+    return analyses_db.liste()
+
+
 @app.post("/api/triage/{claim_id}", response_model=TriageResult, tags=["modele"])
 async def triage(claim_id: str, model: Optional[str] = Query(None)) -> dict:
     """Boucle agentique complete, en bloquant jusqu'au resultat.
@@ -622,9 +675,11 @@ async def triage(claim_id: str, model: Optional[str] = Query(None)) -> dict:
 
     _acquire_run_lock()
     try:
-        return await run_in_threadpool(
+        resultat = await run_in_threadpool(
             functools.partial(agent.triage_claim, claim_id, model=modele)
         )
+        _archiver(resultat)
+        return resultat
     finally:
         _RUN_LOCK.release()
 
@@ -706,7 +761,11 @@ async def triage_stream(
         donc une seconde demande demarrer par-dessus un triage encore en cours.
         """
         try:
-            agent.triage_claim(claim_id, on_event=events.put, model=modele)
+            resultat = agent.triage_claim(claim_id, on_event=events.put, model=modele)
+            # Archive APRES coup, et non depuis un evenement : le retour de
+            # triage_claim est la seule vue complete de l'analyse (sortie,
+            # ecarts de schema, cout), qu'elle ait abouti ou non.
+            _archiver(resultat)
         except Exception as e:  # noqa: BLE001 - remonte au client puis termine proprement
             events.put({"type": "error", "message": f"{type(e).__name__}: {e}"})
         finally:

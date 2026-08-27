@@ -1,8 +1,11 @@
 """
 src/dataset_db.py
 
-Base SQLite des jeux de donnees deposes : ce qui leur permet de survivre a un
-redemarrage du serveur, la ou ils ne vivaient qu'en memoire.
+Base SQLite locale de l'application. Ce module tient les JEUX DE DONNEES
+deposes - ce qui leur permet de survivre a un redemarrage du serveur, la ou
+ils ne vivaient qu'en memoire. L'historique des analyses partage le meme
+fichier et vit dans src/analyses_db.py ; le schema complet est ici, en un seul
+endroit.
 
 PLUSIEURS JEUX, UN SEUL ACTIF. L'utilisateur nomme ce qu'il depose et passe
 d'un jeu a l'autre sans avoir a redeposer ses fichiers. Le jeu ACTIF est celui
@@ -96,6 +99,25 @@ CREATE TABLE IF NOT EXISTS actif (
     id         INTEGER PRIMARY KEY CHECK (id = 1),
     dataset_id INTEGER NOT NULL REFERENCES datasets(id) ON DELETE CASCADE
 );
+-- Historique des analyses (src/analyses_db.py). Le nom du jeu y est RECOPIE,
+-- et la cle etrangere passe a NULL plutot que d'emporter la ligne : une
+-- analyse a eu lieu, elle a coute de l'argent, et supprimer le jeu de donnees
+-- ne doit pas effacer la trace de ce qui a ete fait.
+CREATE TABLE IF NOT EXISTS analyses (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    claim_id          TEXT NOT NULL,
+    dataset_id        INTEGER REFERENCES datasets(id) ON DELETE SET NULL,
+    dataset_nom       TEXT NOT NULL,
+    analyse_le        TEXT NOT NULL,
+    model             TEXT NOT NULL,
+    cost_usd          REAL NOT NULL,
+    triage            TEXT,
+    priorite          TEXT,
+    output            TEXT,
+    validation_errors TEXT NOT NULL,
+    erreur            TEXT
+);
+CREATE INDEX IF NOT EXISTS analyses_par_date ON analyses (analyse_le DESC);
 """
 
 
@@ -124,6 +146,12 @@ def _avertir(message: str) -> None:
     un jeu jamais depose, et personne ne sait qu'il y a eu un probleme.
     """
     print(f"[dataset_db] {message}", file=sys.stderr)
+
+
+def ouvrir() -> sqlite3.Connection:
+    """Connexion prete a l'emploi, schema applique. Utilisee par les autres
+    modules qui partagent ce meme fichier (src/analyses_db.py)."""
+    return _connect()
 
 
 def _connect() -> sqlite3.Connection:
