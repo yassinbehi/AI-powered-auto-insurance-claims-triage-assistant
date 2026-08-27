@@ -12,3 +12,7 @@ venv/
 .config/
 config
 
+# Base du jeu de donnees depose (backend/dataset.sqlite3) : donnees de
+# l'utilisateur, jamais du code.
+*.sqlite3
+*.sqlite3-journal

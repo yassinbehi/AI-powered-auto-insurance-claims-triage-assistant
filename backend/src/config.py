@@ -20,6 +20,13 @@ REPO_ROOT = BACKEND_ROOT.parent
 DATA_DIR = REPO_ROOT / "data"
 PROMPTS_DIR = BACKEND_ROOT / "prompts"
 
+# Base SQLite du jeu de donnees depose (src/dataset_db.py). Elle vit dans
+# backend/ et non dans data/ : data/ contient les fichiers d'entree fournis
+# avec le sujet, en lecture seule, alors que ce fichier-ci est produit par
+# l'application. Il est ignore par git (voir .gitignore) - il contient les
+# dossiers de l'utilisateur, pas du code.
+DATASET_DB_FILE = BACKEND_ROOT / "dataset.sqlite3"
+
 POLICIES_FILE = DATA_DIR / "policies_auto.csv"
 CLAIMS_FILE = DATA_DIR / "claims_auto.csv"
 REGLES_SINISTRES_FILE = DATA_DIR / "regles_sinistres.md"

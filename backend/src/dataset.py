@@ -18,14 +18,24 @@ L'API refuse alors de repondre sur les sinistres, et l'interface affiche un
 ecran de depot. Il n'existe AUCUN repli silencieux sur data/ : ce repli
 serait precisement le defaut a eviter.
 
-DUREE DE VIE : en memoire, dans le processus du serveur. Un redemarrage vide
-le jeu de donnees et l'utilisateur redepose ses fichiers. Rien n'est ecrit
-sur le disque, donc rien a nettoyer et aucune donnee client oubliee sur la
-machine.
+DUREE DE VIE : les dictionnaires ci-dessous restent le chemin de LECTURE, en
+memoire dans le processus du serveur. Ils sont doubles d'une base SQLite
+(src/dataset_db.py) ecrite au moment du depot, et relue une seule fois au
+demarrage : un redemarrage du serveur ne fait donc plus perdre les fichiers
+deposes.
+
+CONSEQUENCE ASSUMEE : les dossiers de l'utilisateur - noms, vehicules,
+montants, messages clients - sont desormais ECRITS SUR LE DISQUE, dans
+backend/dataset.sqlite3. Ce n'etait pas le cas avant, et c'est le prix de la
+persistance. Deux garde-fous : DELETE /api/dataset efface reellement la base
+(voir clear() ci-dessous), et seul un jeu DEPOSE y est enregistre - jamais un
+jeu lu sur le disque par les evaluations ou les tests (voir set_active).
 """
 
 from datetime import datetime, timezone
 from typing import Optional
+
+import dataset_db
 
 # D'OU VIENT LE JEU DE DONNEES ACTIF.
 #
@@ -54,6 +64,8 @@ def set_active(
     claims_filename: str = "",
     policies_filename: str = "",
     rejets: Optional[list] = None,
+    loaded_at: Optional[str] = None,
+    persister: bool = True,
 ) -> None:
     """Remplace le jeu de donnees actif. Les deux fichiers vont toujours
     ensemble : une declaration sans son contrat n'est pas exploitable.
@@ -66,7 +78,15 @@ def set_active(
     (tools.LigneRejetee). Elles sont conservees AVEC le jeu de donnees, et non
     renvoyees seulement en reponse au depot : l'interface se rafraichit en
     relisant /api/dataset, et un avertissement qui disparait au premier
-    rafraichissement ne previent personne."""
+    rafraichissement ne previent personne.
+
+    `loaded_at` (ISO 8601) impose la date de chargement au lieu de prendre
+    l'instant present. Sert au seul restore_from_db() : un jeu retrouve au
+    demarrage a ete depose une fois, et doit continuer d'afficher CETTE
+    date-la plutot que celle du redemarrage.
+
+    `persister` a False n'ecrit pas dans la base. Sert lui aussi a
+    restore_from_db(), qui vient precisement d'en sortir les donnees."""
     if source not in _SOURCES:
         raise ValueError(
             f"source={source!r} inconnue : attendu {SOURCE_DEPOT!r} "
@@ -81,17 +101,67 @@ def set_active(
         "policies_filename": policies_filename,
         "claims_count": len(claims),
         "policies_count": len(policies),
-        "loaded_at": datetime.now(timezone.utc).isoformat(),
+        "loaded_at": loaded_at or datetime.now(timezone.utc).isoformat(),
         "lignes_rejetees": list(rejets or []),
     }
 
+    # SEUL UN JEU DEPOSE EST ENREGISTRE. Un jeu lu sur le disque
+    # (SOURCE_FICHIERS : evaluations, terminal, tests) ne doit jamais atterrir
+    # dans la base : il ecraserait les dossiers de l'utilisateur, et serait
+    # ressuscite au demarrage suivant comme s'il les avait deposes - la
+    # confusion meme que ce module existe pour empecher.
+    if persister and source == SOURCE_DEPOT:
+        dataset_db.save(
+            claims,
+            policies,
+            claims_filename=claims_filename,
+            policies_filename=policies_filename,
+            loaded_at=_meta["loaded_at"],
+            lignes_rejetees=_meta["lignes_rejetees"],
+        )
+
 
 def clear() -> None:
+    """Retire le jeu de donnees actif, en memoire ET sur le disque.
+
+    Les deux vont ensemble : un utilisateur qui retire ses donnees ne
+    s'attend pas a les revoir au prochain demarrage."""
     global _claims, _policies, _source, _meta
     _claims = None
     _policies = None
     _source = None
     _meta = {}
+    dataset_db.clear()
+
+
+def restore_from_db() -> bool:
+    """Recharge le dernier jeu DEPOSE, s'il en existe un. Renvoie True si un
+    jeu a ete retrouve.
+
+    Appelee une seule fois, au demarrage du serveur (voir api.py). Ne fait
+    rien si un jeu est deja actif : une restauration ne doit pas pouvoir
+    ecraser ce que l'utilisateur vient de deposer.
+    """
+    if is_loaded():
+        return False
+
+    enregistre = dataset_db.load()
+    if enregistre is None:
+        return False
+
+    set_active(
+        enregistre["claims"],
+        enregistre["policies"],
+        # La base ne contient que du depot (voir set_active), donc l'origine
+        # retrouvee est necessairement celle-la.
+        source=SOURCE_DEPOT,
+        claims_filename=enregistre["claims_filename"],
+        policies_filename=enregistre["policies_filename"],
+        rejets=enregistre["lignes_rejetees"],
+        loaded_at=enregistre["loaded_at"],
+        persister=False,  # ces donnees SORTENT de la base
+    )
+    return True
 
 
 def source() -> Optional[str]:

@@ -48,6 +48,7 @@ TROIS POINTS DE VIGILANCE, dans l'ordre d'importance :
    sans intention. D'ou le parametre obligatoire `confirm=1`.
 """
 
+import contextlib
 import functools
 import json
 import os
@@ -92,10 +93,31 @@ from tools import (
     parse_policies_csv,
 )
 
+@contextlib.asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Au demarrage : recharge le dernier jeu de donnees depose, s'il en reste
+    un dans la base (src/dataset_db.py).
+
+    Avant cette base, un redemarrage du serveur renvoyait l'utilisateur a
+    l'ecran de depot en pleine session de travail. La restauration est
+    silencieuse si rien n'est enregistre : l'ecran de depot reste le point de
+    depart d'une premiere utilisation.
+    """
+    if dataset.restore_from_db():
+        etat = dataset.summary()
+        print(
+            f"[dataset] jeu restaure : {etat['claims_count']} declarations, "
+            f"{etat['policies_count']} contrats "
+            f"({etat['claims_filename']}, depose le {etat['loaded_at']})"
+        )
+    yield
+
+
 app = FastAPI(
     title="TSA - Triage Sinistres Auto",
     description=__doc__,
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 # Le frontend Next.js tourne sur un autre port. On preferre CORS a un proxy
@@ -285,8 +307,10 @@ async def upload_dataset(
     son contrat n'est pas exploitable, et accepter un fichier a la fois
     laisserait l'application dans un etat incoherent.
 
-    Rien n'est ecrit sur le disque : le jeu de donnees vit en memoire dans le
-    processus (voir src/dataset.py).
+    Le jeu de donnees vit en memoire pour la lecture, et est enregistre dans
+    backend/dataset.sqlite3 pour survivre a un redemarrage (voir
+    src/dataset.py et src/dataset_db.py). DELETE /api/dataset l'efface des
+    deux.
     """
     def _decode(contenu: bytes, quel_fichier: str) -> str:
         # tools.decode_csv est la source unique : la lecture disque (evals,
