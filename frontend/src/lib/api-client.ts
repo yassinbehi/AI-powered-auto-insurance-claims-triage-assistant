@@ -32,8 +32,12 @@ async function readDetail(response: Response): Promise<string> {
  * une boucle agentique complete, et ne doit pas pouvoir partir sur un prefetch
  * de lien ou un crawler.
  */
-export function triageStreamUrl(claimId: string): string {
-  return `${API_BASE_URL}/api/triage/${encodeURIComponent(claimId)}/stream?confirm=1`;
+export function triageStreamUrl(claimId: string, model?: string): string {
+  const params = new URLSearchParams({ confirm: "1" });
+  // Absent, le backend applique son modele par defaut ; present, il le valide
+  // contre config.AVAILABLE_MODELS (400 si inconnu).
+  if (model) params.set("model", model);
+  return `${API_BASE_URL}/api/triage/${encodeURIComponent(claimId)}/stream?${params.toString()}`;
 }
 
 /**

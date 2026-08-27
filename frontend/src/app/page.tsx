@@ -9,6 +9,8 @@ import {
   filtrerClaims,
   filtresActifs,
   lireFiltres,
+  lireTri,
+  trierClaims,
 } from "@/lib/claims-filter";
 
 /**
@@ -53,8 +55,10 @@ export default async function AccueilPage({ searchParams }: PageProps<"/">) {
   // de filtres en JavaScript. Chaque changement de filtre relit l'API - c'est
   // le bon compromis pour une console mono-utilisateur sur un jeu depose, et
   // le delai de saisie limite cela a une requete par pause.
-  const filtres = lireFiltres(await searchParams);
-  const visibles = filtrerClaims(claims, filtres);
+  const params = await searchParams;
+  const filtres = lireFiltres(params);
+  const tri = lireTri(params);
+  const visibles = trierClaims(filtrerClaims(claims, filtres), tri);
   const nbFiltres = filtresActifs(filtres);
 
   return (
@@ -72,7 +76,7 @@ export default async function AccueilPage({ searchParams }: PageProps<"/">) {
       />
       <DatasetBar state={dataset} />
       <ClaimsFilterBar datesIncoherentes={datesIncoherentes(filtres)} />
-      <ClaimsTable claims={visibles} filtresActifs={nbFiltres > 0} />
+      <ClaimsTable claims={visibles} filtresActifs={nbFiltres > 0} tri={tri} />
     </PageContainer>
   );
 }

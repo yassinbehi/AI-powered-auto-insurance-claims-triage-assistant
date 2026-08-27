@@ -1,13 +1,21 @@
 "use client";
 
 import { CircleCheck, LoaderCircle, Play, TriangleAlert } from "lucide-react";
+import * as React from "react";
 
+import { ModelSelector } from "@/components/triage/model-selector";
 import { TriageResultCard } from "@/components/result/triage-result-card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useTriageStream, type ProgressStep } from "@/hooks/use-triage-stream";
+import type { ModelOption } from "@/lib/types";
 import { cn } from "@/lib/utils";
+
+/** Modele par defaut : celui marque `default`, sinon le premier de la liste. */
+function modeleParDefaut(models: ModelOption[]): string {
+  return (models.find((m) => m.default) ?? models[0])?.id ?? "";
+}
 
 /**
  * Avancement de l'analyse, en termes de dossier.
@@ -61,50 +69,75 @@ function Avancement({ steps, termine }: { steps: ProgressStep[]; termine: boolea
 export function TriageRunView({
   claimId,
   brief,
+  models,
   messageSignale = false,
 }: {
   claimId: string;
   brief?: React.ReactNode;
+  /** Modeles proposes pour l'analyse (GET /api/models). Vide = le backend
+   *  appliquera son defaut, et le selecteur ne s'affiche pas. */
+  models: ModelOption[];
   /** Le message du client a ete ecarte du filtre. On le rappelle une fois
    *  l'analyse terminee : le triage ne l'a pas lu, mais le gestionnaire peut le
    *  relire (avec sa note) dans « Le sinistre en bref » ci-dessous. */
   messageSignale?: boolean;
 }) {
   const { status, steps, output, error, start, cancel } = useTriageStream(claimId);
+  const [modele, setModele] = React.useState(() => modeleParDefaut(models));
+  // Le modele REELLEMENT lance, fige au moment du clic : le selecteur peut
+  // changer ensuite sans faire mentir le « analysé avec … » du resultat.
+  const [modeleLance, setModeleLance] = React.useState<string | null>(null);
 
   const enCours = status === "running";
   const termine = status === "done";
   const lance = status !== "idle";
 
+  const labelDe = (id: string | null) =>
+    models.find((m) => m.id === id)?.label ?? id ?? "";
+
+  function lancer() {
+    setModeleLance(modele);
+    start(modele || undefined);
+  }
+
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center gap-3">
-        <Button onClick={start} disabled={enCours}>
-          {enCours ? (
-            <LoaderCircle className="animate-spin" aria-hidden="true" />
-          ) : (
-            <Play aria-hidden="true" />
-          )}
-          {status === "idle" ? "Analyser le dossier" : "Relancer l'analyse"}
-        </Button>
+      <div className="flex flex-wrap items-end gap-4">
+        <ModelSelector
+          models={models}
+          value={modele}
+          onChange={setModele}
+          disabled={enCours}
+        />
 
-        {enCours ? (
-          <Button variant="outline" onClick={cancel}>
-            Arrêter
+        <div className="flex flex-wrap items-center gap-3">
+          <Button onClick={lancer} disabled={enCours}>
+            {enCours ? (
+              <LoaderCircle className="animate-spin" aria-hidden="true" />
+            ) : (
+              <Play aria-hidden="true" />
+            )}
+            {status === "idle" ? "Analyser le dossier" : "Relancer l'analyse"}
           </Button>
-        ) : null}
 
-        <p role="status" aria-live="polite" className="text-sm text-muted-foreground">
-          {enCours
-            ? "Analyse en cours…"
-            : termine
-              ? "Analyse terminée."
-              : status === "cancelled"
-                ? "Analyse interrompue."
-                : status === "error"
-                  ? ""
-                  : "Aucune analyse lancée pour ce dossier."}
-        </p>
+          {enCours ? (
+            <Button variant="outline" onClick={cancel}>
+              Arrêter
+            </Button>
+          ) : null}
+
+          <p role="status" aria-live="polite" className="text-sm text-muted-foreground">
+            {enCours
+              ? `Analyse en cours${modeleLance ? ` avec ${labelDe(modeleLance)}` : ""}…`
+              : termine
+                ? `Analyse terminée${modeleLance ? ` avec ${labelDe(modeleLance)}` : ""}.`
+                : status === "cancelled"
+                  ? "Analyse interrompue."
+                  : status === "error"
+                    ? ""
+                    : "Aucune analyse lancée pour ce dossier."}
+          </p>
+        </div>
       </div>
 
       {error ? (

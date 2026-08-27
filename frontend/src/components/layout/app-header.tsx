@@ -4,6 +4,7 @@ import { ScrollText } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { CumulativeCostBadge } from "@/components/layout/cumulative-cost-badge";
 import { HowItWorksSheet } from "@/components/layout/how-it-works-sheet";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
 import { cn } from "@/lib/utils";
@@ -52,6 +53,9 @@ export function AppHeader() {
         </nav>
 
         <div className="ml-auto flex items-center gap-1">
+          {/* Le cout cumule precede les deux commandes de la barre : c'est une
+              information, pas une action, et il se lit avant qu'on agisse. */}
+          <CumulativeCostBadge />
           <HowItWorksSheet />
           <ThemeToggle />
         </div>

@@ -54,6 +54,7 @@ import os
 import queue
 import threading
 from datetime import datetime, timezone
+from typing import Optional
 
 import anyio
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
@@ -70,12 +71,13 @@ from api_models import (
     ClaimSummary,
     DatasetState,
     Health,
+    ModelOption,
     Policy,
     Rules,
     Screening,
     TriageResult,
 )
-from config import DATA_DIR, MODEL, REGLES_SINISTRES_FILE
+from config import AVAILABLE_MODELS, DATA_DIR, MODEL, REGLES_SINISTRES_FILE
 from tools import (
     ClaimNotFound,
     EncodageIllisible,
@@ -478,20 +480,54 @@ async def screen(claim_id: str) -> dict:
     return _screening_from(screened, original_text=claim.get("description_client", ""))
 
 
+def _valider_modele(model: Optional[str]) -> str:
+    """Ramene le parametre `model` recu a un identifiant AUTORISE.
+
+    Absent -> le defaut (config.MODEL). Present mais inconnu -> 400 : on refuse
+    net plutot que de retomber en silence sur le defaut, pour qu'une faute de
+    frappe ou un modele retire se voie tout de suite au lieu de facturer un
+    triage sur un autre modele que celui demande.
+    """
+    if not model:
+        return MODEL
+    if model not in AVAILABLE_MODELS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Modele inconnu: {model!r}. Choix possibles: {sorted(AVAILABLE_MODELS)}.",
+        )
+    return model
+
+
+@app.get("/api/models", response_model=list[ModelOption], tags=["modele"])
+def list_models() -> list[dict]:
+    """Modeles proposes pour l'analyse. Le frontend en fait la liste de choix ;
+    l'ordre est celui de config.AVAILABLE_MODELS, le premier etant le defaut."""
+    return [
+        {"id": mid, "label": label, "default": mid == MODEL}
+        for mid, label in AVAILABLE_MODELS.items()
+    ]
+
+
 @app.post("/api/triage/{claim_id}", response_model=TriageResult, tags=["modele"])
-async def triage(claim_id: str) -> dict:
+async def triage(claim_id: str, model: Optional[str] = Query(None)) -> dict:
     """Boucle agentique complete, en bloquant jusqu'au resultat.
 
     Compter plusieurs dizaines de secondes : un aller-retour de modele par
     tour d'outils (jusqu'a MAX_TOOL_TURNS), plus l'appel du filtre. Pour
     suivre la progression, utiliser plutot l'endpoint SSE ci-dessous.
+
+    `model` (optionnel) : l'un des identifiants de config.AVAILABLE_MODELS ;
+    absent, le defaut s'applique.
     """
     _exiger_jeu_de_donnees()
     _get_claim_or_404(claim_id)
+    modele = _valider_modele(model)
 
     _acquire_run_lock()
     try:
-        return await run_in_threadpool(agent.triage_claim, claim_id)
+        return await run_in_threadpool(
+            functools.partial(agent.triage_claim, claim_id, model=modele)
+        )
     finally:
         _RUN_LOCK.release()
 
@@ -529,6 +565,10 @@ async def triage_stream(
         description="Doit valoir 1. Garde-fou contre un declenchement accidentel "
         "de ce GET (prefetch de liens, preconnect, crawler).",
     ),
+    model: Optional[str] = Query(
+        None,
+        description="Identifiant de modele (config.AVAILABLE_MODELS). Absent : le defaut.",
+    ),
 ) -> StreamingResponse:
     """Meme triage que POST /api/triage/{id}, diffuse au fil de l'eau.
 
@@ -554,6 +594,7 @@ async def triage_stream(
 
     _exiger_jeu_de_donnees()
     _get_claim_or_404(claim_id)
+    modele = _valider_modele(model)  # avant le verrou : un 400 ne doit pas le prendre
     _acquire_run_lock()
 
     events: queue.Queue = queue.Queue()
@@ -568,7 +609,7 @@ async def triage_stream(
         donc une seconde demande demarrer par-dessus un triage encore en cours.
         """
         try:
-            agent.triage_claim(claim_id, on_event=events.put)
+            agent.triage_claim(claim_id, on_event=events.put, model=modele)
         except Exception as e:  # noqa: BLE001 - remonte au client puis termine proprement
             events.put({"type": "error", "message": f"{type(e).__name__}: {e}"})
         finally:

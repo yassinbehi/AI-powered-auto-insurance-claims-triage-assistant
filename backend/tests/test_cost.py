@@ -5,11 +5,13 @@ formule pure sur des dicts.
 
 import pytest
 
+from config import MODEL
 from cost import (
     accumulate_usage,
     calculate_cost_usd,
     empty_usage_totals,
     format_cost_report,
+    prices_for_model,
     usage_to_dict,
 )
 
@@ -69,6 +71,38 @@ class TestCalculateCostUsd:
 
     def test_empty_usage_costs_nothing(self):
         assert calculate_cost_usd(empty_usage_totals()) == 0.0
+
+
+class TestTarifsParModele:
+    """L'utilisateur peut lancer un triage sur un autre modele que le defaut
+    (config.AVAILABLE_MODELS) : tout facturer au tarif du defaut
+    sous-estimerait le cout affiche."""
+
+    _USAGE = {"input_tokens": 1_000_000, "output_tokens": 1_000_000}
+
+    def test_le_defaut_reste_le_comportement_sans_argument(self):
+        assert calculate_cost_usd(self._USAGE) == calculate_cost_usd(
+            self._USAGE, model=MODEL
+        )
+
+    def test_un_modele_plus_cher_coute_plus_cher(self):
+        # Sonnet 4.6 : 3.00 / 15.00 par MTok, contre 1.00 / 5.00 pour Haiku 4.5.
+        assert calculate_cost_usd(self._USAGE, model="claude-sonnet-4-6") == pytest.approx(18.00)
+        assert calculate_cost_usd(self._USAGE, model=MODEL) == pytest.approx(6.00)
+
+    def test_un_modele_inconnu_retombe_sur_le_defaut(self):
+        """Un triage DEJA PAYE ne doit pas se terminer par une exception parce
+        que la table de tarifs ignore le modele."""
+        assert prices_for_model("modele-jamais-vu") == prices_for_model(MODEL)
+        assert calculate_cost_usd(self._USAGE, model="modele-jamais-vu") == pytest.approx(6.00)
+
+    def test_les_tarifs_de_cache_derivent_du_tarif_d_entree(self):
+        """Multiplicateurs standards Anthropic : ecriture 5m = 1.25x l'entree,
+        lecture = 0.1x. Voir config.MODEL_PRICES_PER_MTOK_USD."""
+        for modele in (MODEL, "claude-sonnet-4-6"):
+            tarifs = prices_for_model(modele)
+            assert tarifs["cache_write_5m"] == pytest.approx(1.25 * tarifs["input"])
+            assert tarifs["cache_read"] == pytest.approx(0.10 * tarifs["input"])
 
 
 class TestAccumulateUsage:

@@ -39,7 +39,27 @@ MAX_TOKENS = 1500
 # Temperature 0 : on veut le triage le plus deterministe possible. Un meme
 # dossier doit produire le meme classement d'un appel a l'autre, aussi bien
 # pour le triage (agent.py) que pour le classifieur anti-injection (guard.py).
+#
+# TRANSMISE VIA extra_body, ET NON EN ARGUMENT NOMME : le SDK anthropic 1.x a
+# retire `temperature` de la signature de messages.create() / .stream(), ou il
+# leve maintenant un TypeError. Le parametre reste accepte par l'API pour les
+# modeles de ce projet ; extra_body l'insere tel quel dans le corps de la
+# requete. Voir les deux appels concernes (agent.py, guard.py).
 TEMPERATURE = 0
+
+# Modeles proposes a l'utilisateur pour l'analyse d'un dossier. Le PREMIER est
+# le defaut (= MODEL). Le classifieur anti-injection (guard.py) reste, lui,
+# toujours sur MODEL : c'est une couche de securite interne, pas un choix
+# utilisateur, et Haiku y suffit.
+#
+# Sonnet 4.6 et NON Sonnet 5 : Sonnet 5 rejette le parametre `temperature`
+# (erreur 400), or tout le triage repose sur temperature=0 pour rester
+# deterministe. Sonnet 4.6 accepte temperature : les deux modeles partagent
+# donc exactement la meme forme de requete, sans branche conditionnelle.
+AVAILABLE_MODELS = {
+    MODEL: "Claude Haiku 4.5",
+    "claude-sonnet-4-6": "Claude Sonnet 4.6",
+}
 
 # ---------------------------------------------------------------------------
 # Agent loop limits
@@ -84,3 +104,33 @@ PRICE_CACHE_READ_PER_MTOK_USD = 0.10
 BUDGET_CEILING_USD = 5.00
 BUDGET_TARGET_MIN_USD = 1.50
 BUDGET_TARGET_MAX_USD = 2.75
+
+# Tarifs PAR MODELE proposable (AVAILABLE_MODELS), en USD par million de
+# tokens. Les constantes PRICE_* ci-dessus restent celles du modele par
+# defaut : elles servent de reference et de repli.
+#
+# POURQUOI CETTE TABLE : le triage peut tourner sur un autre modele que le
+# defaut (voir AVAILABLE_MODELS et le selecteur cote interface), et Sonnet 4.6
+# coute trois fois le prix de Haiku 4.5. Facturer tous les appels au tarif
+# Haiku sous-estimerait le cumul affiche a l'utilisateur des qu'il change de
+# modele. Le filtre anti-injection (guard.py) reste, lui, toujours sur MODEL :
+# son cout est donc calcule avec la ligne de MODEL, quel que soit le modele
+# choisi pour le triage.
+#
+# A VERIFIER contre platform.claude.com/docs/en/pricing, meme reserve que
+# ci-dessus : les tarifs de cache sont DERIVES du multiplicateur standard
+# (write 5m = 1.25x input, read = 0.1x input).
+MODEL_PRICES_PER_MTOK_USD = {
+    MODEL: {
+        "input": PRICE_INPUT_PER_MTOK_USD,
+        "output": PRICE_OUTPUT_PER_MTOK_USD,
+        "cache_write_5m": PRICE_CACHE_WRITE_5M_PER_MTOK_USD,
+        "cache_read": PRICE_CACHE_READ_PER_MTOK_USD,
+    },
+    "claude-sonnet-4-6": {
+        "input": 3.00,
+        "output": 15.00,
+        "cache_write_5m": 3.75,
+        "cache_read": 0.30,
+    },
+}

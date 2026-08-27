@@ -14,10 +14,8 @@ from config import (
     BUDGET_CEILING_USD,
     BUDGET_TARGET_MAX_USD,
     BUDGET_TARGET_MIN_USD,
-    PRICE_CACHE_READ_PER_MTOK_USD,
-    PRICE_CACHE_WRITE_5M_PER_MTOK_USD,
-    PRICE_INPUT_PER_MTOK_USD,
-    PRICE_OUTPUT_PER_MTOK_USD,
+    MODEL,
+    MODEL_PRICES_PER_MTOK_USD,
 )
 
 USAGE_FIELDS = (
@@ -39,18 +37,35 @@ def usage_to_dict(usage) -> dict:
     return {field: _get(field) for field in USAGE_FIELDS}
 
 
-def calculate_cost_usd(usage: dict) -> float:
+def prices_for_model(model: Optional[str] = None) -> dict:
+    """Ligne de tarifs d'un modele (config.MODEL_PRICES_PER_MTOK_USD).
+
+    Modele absent ou inconnu -> tarifs du modele par defaut. Un modele inconnu
+    ne doit PAS faire echouer un triage deja paye : mieux vaut un cout estime
+    au tarif du defaut qu'une exception apres l'appel.
+    """
+    return MODEL_PRICES_PER_MTOK_USD.get(
+        model or MODEL, MODEL_PRICES_PER_MTOK_USD[MODEL]
+    )
+
+
+def calculate_cost_usd(usage: dict, model: Optional[str] = None) -> float:
     """Cout en USD d'un usage donne. Suppose un cache TTL de 5 minutes (la
     seule TTL utilisee dans agent.py : cache_control sans ttl explicite).
 
     Tarif unique : le mode batch (-50%) a ete retire du projet, tous les
     appels sont donc synchrones et factures au tarif standard.
+
+    `model` : le modele qui a produit cet usage. Absent, les tarifs du modele
+    par defaut s'appliquent - c'est le comportement historique, conserve pour
+    tous les appelants qui n'ont qu'un seul modele en jeu (main.py, evals).
     """
+    prices = prices_for_model(model)
     return (
-        usage.get("input_tokens", 0) / 1_000_000 * PRICE_INPUT_PER_MTOK_USD
-        + usage.get("output_tokens", 0) / 1_000_000 * PRICE_OUTPUT_PER_MTOK_USD
-        + usage.get("cache_creation_input_tokens", 0) / 1_000_000 * PRICE_CACHE_WRITE_5M_PER_MTOK_USD
-        + usage.get("cache_read_input_tokens", 0) / 1_000_000 * PRICE_CACHE_READ_PER_MTOK_USD
+        usage.get("input_tokens", 0) / 1_000_000 * prices["input"]
+        + usage.get("output_tokens", 0) / 1_000_000 * prices["output"]
+        + usage.get("cache_creation_input_tokens", 0) / 1_000_000 * prices["cache_write_5m"]
+        + usage.get("cache_read_input_tokens", 0) / 1_000_000 * prices["cache_read"]
     )
 
 
@@ -63,7 +78,7 @@ def accumulate_usage(totals: dict, usage: dict) -> dict:
     return {field: totals.get(field, 0) + usage.get(field, 0) for field in USAGE_FIELDS}
 
 
-def format_cost_report(totals: dict) -> dict:
+def format_cost_report(totals: dict, model: Optional[str] = None) -> dict:
     """Ajoute cost_usd et les flags de depassement de budget a un dict
     d'usage accumule (voir accumulate_usage).
 
@@ -71,7 +86,7 @@ def format_cost_report(totals: dict) -> dict:
     filtre anti-injection (src/guard.py) : ils sont factures au meme tarif
     que les appels de triage, et les omettre sous-estime le budget.
     """
-    cost_usd = calculate_cost_usd(totals)
+    cost_usd = calculate_cost_usd(totals, model=model)
     over_ceiling = cost_usd > BUDGET_CEILING_USD
     over_target = cost_usd > BUDGET_TARGET_MAX_USD
 

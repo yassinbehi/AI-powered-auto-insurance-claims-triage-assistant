@@ -204,6 +204,17 @@ export interface ClaimDetail {
   screening: Screening;
 }
 
+/**
+ * Un modele proposable pour l'analyse d'un dossier. Source de verite :
+ * GET /api/models (backend config.AVAILABLE_MODELS), qui valide aussi le choix
+ * renvoye au lancement. `default` marque celui applique a defaut de choix.
+ */
+export interface ModelOption {
+  id: string;
+  label: string;
+  default: boolean;
+}
+
 // =============================================================================
 // Triage
 // =============================================================================
@@ -245,6 +256,13 @@ export interface TriageResult {
   usage: Usage;
   error: string | null;
   raw_output: string | null;
+  /** Modele effectivement utilise (backend api._valider_modele). */
+  model: string | null;
+  /** Cout en USD de CETTE execution, filtre anti-injection compris et au tarif
+   *  de chaque modele (backend agent._run_cost_usd). Renseigne aussi sur les
+   *  chemins d'echec : une analyse interrompue a quand meme ete facturee.
+   *  C'est ce montant que lib/cumulative-cost.ts additionne. */
+  cost_usd: number;
 }
 
 export interface RulesDocument {
@@ -275,9 +293,14 @@ export type StreamEvent =
       validation_errors: string[];
       tool_call_trace: ToolCall[];
       usage: Usage;
+      model: string;
+      /** Voir TriageResult.cost_usd. */
+      cost_usd: number;
     }
   // `run_error` et non `error` : cote navigateur, EventSource reserve deja le
   // nom "error" a ses pannes de transport. Voir _EVENT_NAME_OVERRIDES dans
   // backend/src/api.py.
-  | { type: "run_error"; message: string; raw_output?: string }
+  // `cost_usd` est present ici aussi : un triage qui echoue apres plusieurs
+  // tours a deja ete facture, et l'omettre sous-estimerait le cumul.
+  | { type: "run_error"; message: string; raw_output?: string; cost_usd?: number }
   | { type: "done" };

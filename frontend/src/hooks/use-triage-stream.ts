@@ -3,6 +3,7 @@
 import * as React from "react";
 
 import { triageStreamUrl } from "@/lib/api-client";
+import { ajouterCout, formaterCout } from "@/lib/cumulative-cost";
 import { devGroup, devLog, devWarn } from "@/lib/dev-log";
 import type { ToolCall, TriageOutput, Usage } from "@/lib/types";
 
@@ -138,14 +139,15 @@ export function useTriageStream(claimId: string) {
     sourceRef.current = null;
   }, []);
 
-  const start = React.useCallback(() => {
+  const start = React.useCallback(
+    (model?: string) => {
     if (sourceRef.current) return;
 
     texteRef.current = "";
     dispatch({ kind: "start" });
-    devLog(`--- triage ${claimId} ---`);
+    devLog(`--- triage ${claimId}${model ? ` · ${model}` : ""} ---`);
 
-    const source = new EventSource(triageStreamUrl(claimId));
+    const source = new EventSource(triageStreamUrl(claimId, model));
     sourceRef.current = source;
 
     function surEvenement<T>(nom: string, gere: (donnees: T) => void) {
@@ -188,10 +190,15 @@ export function useTriageStream(claimId: string) {
       validation_errors: string[];
       tool_call_trace: ToolCall[];
       usage: Usage;
+      cost_usd?: number;
     }>("result", (d) => {
       devGroup("réponse brute du modèle", texteRef.current);
       devGroup("trace des outils", d.tool_call_trace);
       devLog("consommation", d.usage);
+      // Le detail par execution reste technique et part dans la console ; seul
+      // le CUMUL est montre a l'ecran (composants layout/cumulative-cost-badge).
+      devLog(`coût de l'analyse ${formaterCout(d.cost_usd ?? 0)}`);
+      ajouterCout(d.cost_usd);
       if (d.validation_errors?.length) {
         // Ecarts au contrat de sortie : information de developpeur. Elle ne
         // change rien a ce que le gestionnaire doit faire du dossier.
@@ -201,10 +208,16 @@ export function useTriageStream(claimId: string) {
       dispatch({ kind: "result", output: d.output });
     });
 
-    surEvenement<{ message: string; raw_output?: string }>("run_error", (d) => {
-      devWarn(d.message, d.raw_output);
-      dispatch({ kind: "error", message: messageLisible(d.message) });
-    });
+    surEvenement<{ message: string; raw_output?: string; cost_usd?: number }>(
+      "run_error",
+      (d) => {
+        devWarn(d.message, d.raw_output);
+        // Une analyse qui echoue en cours de route a deja consomme des appels
+        // de modele : son cout compte dans le cumul comme celui d'une reussite.
+        ajouterCout(d.cost_usd);
+        dispatch({ kind: "error", message: messageLisible(d.message) });
+      },
+    );
 
     source.addEventListener("done", () => {
       dispatch({ kind: "done" });

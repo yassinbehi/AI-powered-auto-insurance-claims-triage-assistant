@@ -83,7 +83,7 @@ from tools import (
     PolicyNotFound,
     ClaimNotFound,
 )
-from guard import screen_claim
+from guard import get_guard_usage_total, screen_claim
 from schema import validate_full
 
 
@@ -236,21 +236,59 @@ def _execute_tool_use_block(block) -> dict:
 # Mode "normal" : boucle agentique synchrone, en streaming.
 # =============================================================================
 
+def _guard_usage_since(before: dict) -> dict:
+    """Ce que le filtre anti-injection (guard.py) a consomme DEPUIS `before`.
+
+    guard.py accumule son usage dans une globale de processus : seule la
+    difference avec l'instantane pris au debut du triage appartient a ce
+    triage-la. L'API serialise les executions (api._RUN_LOCK), donc aucune
+    autre boucle ne peut s'intercaler et gonfler cette difference.
+    """
+    after = get_guard_usage_total()
+    return {field: after.get(field, 0) - before.get(field, 0) for field in cost.USAGE_FIELDS}
+
+
+def _run_cost_usd(usage_totals: dict, guard_usage: dict, model: str) -> float:
+    """Cout en USD facture par CE triage, filtre anti-injection compris.
+
+    DEUX tarifs, et c'est le point : le triage suit le modele choisi par
+    l'utilisateur, tandis que le filtre reste sur le modele par defaut
+    (guard.py). Tout additionner au meme tarif sous-estimerait le cout des
+    qu'un modele plus cher est choisi.
+    """
+    return round(
+        cost.calculate_cost_usd(usage_totals, model=model)
+        + cost.calculate_cost_usd(guard_usage, model=MODEL),
+        4,
+    )
+
+
 def triage_claim(
     claim_id: str,
     client: Optional[anthropic.Anthropic] = None,
     on_event=None,
+    model: str = MODEL,
 ) -> dict:
     """Triage d'un seul sinistre en mode normal (streaming, boucle d'outils
     synchrone). Retourne un dict avec le JSON de triage (si produit et
     valide), les erreurs de validation eventuelles, et l'historique des
     tool calls pour tracabilite (SUJET_PROJET.md: "traces par etape").
 
+    `model` : l'un des identifiants de config.AVAILABLE_MODELS. Le choix est
+    valide en amont, a la frontiere HTTP (api.py) ; ici on fait confiance a la
+    chaine recue. Le classifieur anti-injection, lui, ne suit pas ce choix (voir
+    guard.py) : il reste sur le modele par defaut.
+
     `on_event` (optionnel) recoit la progression au fil de l'eau : voir _emit.
     La valeur de retour est identique avec ou sans observateur.
     """
     client = client or anthropic.Anthropic()
-    _emit(on_event, "run_started", claim_id=claim_id, model=MODEL)
+    _emit(on_event, "run_started", claim_id=claim_id, model=model)
+
+    # Pris AVANT le premier tour : le filtre anti-injection tourne pendant le
+    # triage (tools.get_claim l'appelle) et ses tokens sont factures comme les
+    # autres. Voir _guard_usage_since.
+    guard_usage_before = get_guard_usage_total()
 
     messages = [
         {
@@ -282,9 +320,15 @@ def triage_claim(
             _stream_final_message,
             client,
             on_event=on_event,
-            model=MODEL,
+            model=model,
             max_tokens=MAX_TOKENS,
-            temperature=TEMPERATURE,
+            # temperature passe par extra_body : le SDK anthropic 1.x a retire
+            # le parametre de la signature de messages.stream() / create(), ou
+            # il provoque desormais un TypeError. L'API, elle, l'accepte
+            # toujours pour les modeles de ce projet (Haiku 4.5, Sonnet 4.6) ;
+            # extra_body l'insere tel quel dans le corps de la requete. Voir
+            # config.TEMPERATURE : le determinisme du triage en depend.
+            extra_body={"temperature": TEMPERATURE},
             system=system_blocks,
             tools=cached_tools,
             messages=messages,
@@ -303,6 +347,10 @@ def triage_claim(
             _emit(on_event, "turn_completed", turn=turn, usage=turn_usage)
             return _finalize_result(
                 claim_id, final_text, claim_snapshot, tool_call_trace, usage_totals,
+                model=model,
+                cost_usd=_run_cost_usd(
+                    usage_totals, _guard_usage_since(guard_usage_before), model
+                ),
                 on_event=on_event,
             )
 
@@ -337,8 +385,15 @@ def triage_claim(
         "error": f"Nombre maximal de tours d'outils atteint ({MAX_TOOL_TURNS}) sans reponse finale.",
         "tool_call_trace": tool_call_trace,
         "usage": usage_totals,
+        "model": model,
+        # Un triage qui n'aboutit pas a quand meme ete facture : le cout part
+        # aussi sur les chemins d'echec, sans quoi le cumul affiche a
+        # l'utilisateur oublierait precisement les executions les plus cheres.
+        "cost_usd": _run_cost_usd(
+            usage_totals, _guard_usage_since(guard_usage_before), model
+        ),
     }
-    _emit(on_event, "error", message=result["error"])
+    _emit(on_event, "error", message=result["error"], cost_usd=result["cost_usd"])
     return result
 
 
@@ -379,7 +434,8 @@ def _parse_final_json(text: str) -> Optional[dict]:
 
 
 def _finalize_result(
-    claim_id, final_text, claim_snapshot, tool_call_trace, usage_totals, on_event=None
+    claim_id, final_text, claim_snapshot, tool_call_trace, usage_totals,
+    model=MODEL, cost_usd=0.0, on_event=None,
 ) -> dict:
     parsed = _parse_final_json(final_text)
     if parsed is None:
@@ -389,8 +445,13 @@ def _finalize_result(
             "raw_output": final_text,
             "tool_call_trace": tool_call_trace,
             "usage": usage_totals,
+            "model": model,
+            "cost_usd": cost_usd,
         }
-        _emit(on_event, "error", message=result["error"], raw_output=final_text)
+        _emit(
+            on_event, "error", message=result["error"], raw_output=final_text,
+            cost_usd=cost_usd,
+        )
         return result
 
     blessure = bool(claim_snapshot and claim_snapshot.get("blessure") == "oui")
@@ -402,6 +463,8 @@ def _finalize_result(
         "validation_errors": validation_errors,
         "tool_call_trace": tool_call_trace,
         "usage": usage_totals,
+        "model": model,
+        "cost_usd": cost_usd,
     }
     _emit(
         on_event,
@@ -411,6 +474,8 @@ def _finalize_result(
         validation_errors=validation_errors,
         tool_call_trace=tool_call_trace,
         usage=usage_totals,
+        model=model,
+        cost_usd=cost_usd,
     )
     return result
 

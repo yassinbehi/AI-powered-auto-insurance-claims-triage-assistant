@@ -15,6 +15,7 @@ import pytest
 
 import agent
 import guard
+from config import MODEL
 
 
 # =============================================================================
@@ -230,6 +231,61 @@ class TestEvenements:
         assert final["type"] == "result"
         assert final["output"] == _SORTIE
         assert final["validation_errors"] == []
+
+
+# =============================================================================
+# Cout de l'execution
+# =============================================================================
+
+class TestCoutDeLExecution:
+    """`cost_usd` est ce que l'interface additionne pour afficher un cumul
+    (frontend/src/lib/cumulative-cost.ts). Il doit donc etre present, exact,
+    et suivre le modele reellement utilise."""
+
+    # Deux tours de _USAGE, au tarif Haiku 4.5 (1.00 / 5.00 par MTok) :
+    # 200/1e6*1.00 + 40/1e6*5.00 = 0.0004
+    _COUT_HAIKU = 0.0004
+
+    def test_le_resultat_porte_le_cout_et_le_modele(self):
+        result, _ = _run()
+        assert result["cost_usd"] == pytest.approx(self._COUT_HAIKU)
+        assert result["model"] == MODEL
+
+    def test_l_evenement_result_porte_le_meme_cout(self):
+        result, events = _run()
+        final = next(e for e in events if e["type"] == "result")
+        assert final["cost_usd"] == result["cost_usd"]
+        assert final["model"] == result["model"]
+
+    def test_le_cout_suit_le_modele_choisi(self):
+        """Sonnet 4.6 coute trois fois Haiku 4.5 : un cumul calcule au tarif du
+        defaut serait faux des que l'utilisateur change de modele."""
+        result = agent.triage_claim(
+            "CLM-002", client=_client_deux_tours(), model="claude-sonnet-4-6"
+        )
+        assert result["cost_usd"] == pytest.approx(3 * self._COUT_HAIKU)
+        assert result["model"] == "claude-sonnet-4-6"
+
+    def test_un_triage_qui_n_aboutit_pas_est_quand_meme_facture(self):
+        """Plafond de tours atteint : l'execution a consomme des appels de
+        modele, et son cout doit rester visible - sinon le cumul oublie
+        precisement les executions les plus cheres."""
+        tours = [
+            {
+                "events": [],
+                "final": _obj(
+                    content=[_tool_use_block(f"tu_{i}", "get_claim", {"claim_id": "CLM-002"})],
+                    usage=dict(_USAGE),
+                ),
+            }
+            for i in range(agent.MAX_TOOL_TURNS)
+        ]
+        result = agent.triage_claim("CLM-002", client=_FakeClient(tours))
+
+        assert "error" in result
+        assert result["cost_usd"] == pytest.approx(
+            agent.MAX_TOOL_TURNS / 2 * self._COUT_HAIKU
+        )
 
 
 # =============================================================================

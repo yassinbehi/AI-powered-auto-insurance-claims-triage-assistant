@@ -9,7 +9,13 @@
  * et une fiche dossier doit refleter l'etat courant, pas une capture.
  */
 
-import type { ClaimDetail, ClaimSummary, DatasetState, Rules } from "@/lib/types";
+import type {
+  ClaimDetail,
+  ClaimSummary,
+  DatasetState,
+  ModelOption,
+  Rules,
+} from "@/lib/types";
 
 const BASE_URL = process.env.API_BASE_URL ?? "http://127.0.0.1:8000";
 
@@ -77,4 +83,10 @@ export function fetchClaimDetail(claimId: string) {
 
 export function fetchRules() {
   return get<Rules>("/api/rules");
+}
+
+/** Modeles proposes pour l'analyse. Rendu cote serveur avec la page de triage :
+ *  le choix est ainsi disponible avant tout lancement. */
+export function fetchModels() {
+  return get<ModelOption[]>("/api/models");
 }

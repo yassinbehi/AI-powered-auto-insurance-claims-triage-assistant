@@ -5,9 +5,11 @@
  * de cartes en dessous. Un tableau a six colonnes retreci sur un telephone
  * devient illisible ; la version mobile est donc concue, pas subie.
  *
- * Le lancement d'un triage ne figure pas ici : il part de la fiche dossier.
- * Une ligne de tableau cliquable qui declencherait une boucle agentique de
- * plusieurs dizaines de secondes serait trop facile a atteindre par erreur.
+ * Une ligne cliquable ouvre la FICHE dossier - une lecture gratuite et
+ * deterministe - jamais le triage. Le lancement de la boucle agentique, lui,
+ * reste un clic explicite depuis la fiche : trop couteux (plusieurs dizaines de
+ * secondes, un appel de modele) pour etre a portee d'un clic distrait sur la
+ * file.
  *
  * La colonne "Urgence" est la seule valeur CALCULEE de ce tableau, au milieu
  * de faits lus dans le fichier. Le contrat de claim-flags.tsx s'y etend :
@@ -18,7 +20,9 @@
 
 import Link from "next/link";
 
+import { ClaimRowLink } from "@/components/claims/claim-row-link";
 import { BlessureFlag, MontantCell, UrgenceCell } from "@/components/claims/claim-flags";
+import { SortHeader } from "@/components/claims/sort-header";
 import { TypeSinistreBadge } from "@/components/status/domain-badges";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -30,6 +34,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import type { TriFile } from "@/lib/claims-filter";
 import { FORMULE_LABEL, formatDate } from "@/lib/status";
 import type { ClaimSummary } from "@/lib/types";
 
@@ -87,9 +92,11 @@ function FileVide({ filtresActifs }: { filtresActifs: boolean }) {
 export function ClaimsTable({
   claims,
   filtresActifs = false,
+  tri,
 }: {
   claims: ClaimSummary[];
   filtresActifs?: boolean;
+  tri: TriFile;
 }) {
   if (claims.length === 0) {
     return <FileVide filtresActifs={filtresActifs} />;
@@ -102,18 +109,29 @@ export function ClaimsTable({
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="w-44">Urgence</TableHead>
-              <TableHead>Sinistre</TableHead>
+              <TableHead className="w-44">
+                <SortHeader champ="urgence" label="Urgence" tri={tri} />
+              </TableHead>
+              <TableHead>
+                <SortHeader
+                  champ="date"
+                  label="Sinistre"
+                  ariaLabel="date du sinistre"
+                  tri={tri}
+                />
+              </TableHead>
               <TableHead>Assuré</TableHead>
               <TableHead>Type</TableHead>
-              <TableHead className="text-right">Devis</TableHead>
+              <TableHead className="text-right">
+                <SortHeader champ="devis" label="Devis" align="right" tri={tri} />
+              </TableHead>
               <TableHead>Signalements</TableHead>
               <TableHead className="w-0" />
             </TableRow>
           </TableHeader>
           <TableBody>
             {claims.map((claim) => (
-              <TableRow key={claim.claim_id}>
+              <ClaimRowLink key={claim.claim_id} href={`/claims/${claim.claim_id}`}>
                 <TableCell>
                   <UrgenceCell
                     urgence={claim.urgence_estimee}
@@ -146,7 +164,7 @@ export function ClaimsTable({
                     </Link>
                   </Button>
                 </TableCell>
-              </TableRow>
+              </ClaimRowLink>
             ))}
           </TableBody>
         </Table>

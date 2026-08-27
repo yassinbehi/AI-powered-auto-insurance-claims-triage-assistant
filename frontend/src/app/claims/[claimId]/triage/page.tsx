@@ -8,7 +8,12 @@ import { PageContainer, PageHeader } from "@/components/layout/page-container";
 import { TypeSinistreBadge } from "@/components/status/domain-badges";
 import { TriageRunView } from "@/components/triage/triage-run-view";
 import { Button } from "@/components/ui/button";
-import { ApiNoDatasetError, ApiNotFoundError, fetchClaimDetail } from "@/lib/api-server";
+import {
+  ApiNoDatasetError,
+  ApiNotFoundError,
+  fetchClaimDetail,
+  fetchModels,
+} from "@/lib/api-server";
 
 /**
  * Page de triage. Le contexte du dossier est rendu cote serveur (gratuit) ;
@@ -46,6 +51,10 @@ export default async function TriagePage({ params }: PageProps<"/claims/[claimId
   if (resultat.kind === "introuvable") notFound();
 
   const { claim, policy, screening } = resultat.detail;
+  // Le detail du dossier a repondu : le backend est joignable. La liste des
+  // modeles est accessoire - si elle echoue, on degrade vers une liste vide
+  // (selecteur masque, le backend appliquera son modele par defaut).
+  const models = await fetchModels().catch(() => []);
 
   return (
     <PageContainer className="space-y-8">
@@ -69,6 +78,7 @@ export default async function TriagePage({ params }: PageProps<"/claims/[claimId
 
       <TriageRunView
         claimId={claim.claim_id}
+        models={models}
         messageSignale={messageEstSignale(screening)}
         brief={<ClaimBrief claim={claim} policy={policy} screening={screening} />}
       />

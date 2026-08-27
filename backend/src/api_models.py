@@ -220,6 +220,14 @@ class TriageResult(BaseModel):
     error: Optional[str] = None
     raw_output: Optional[str] = None
 
+    # Modele effectivement utilise pour le triage, et cout facture par cette
+    # execution - filtre anti-injection compris, et au tarif de CHAQUE modele
+    # (le filtre reste sur le defaut, voir agent._run_cost_usd). Il est
+    # renseigne sur les trois formes ci-dessus, echecs compris : une execution
+    # interrompue a quand meme ete payee.
+    model: Optional[str] = None
+    cost_usd: float = 0.0
+
 
 # =============================================================================
 # Divers
@@ -229,6 +237,17 @@ class Health(BaseModel):
     status: str
     model: str
     api_key_configured: bool
+
+
+class ModelOption(BaseModel):
+    """Un modele proposable pour l'analyse (voir config.AVAILABLE_MODELS).
+
+    `default` marque celui applique quand l'utilisateur n'en choisit aucun.
+    """
+
+    id: str
+    label: str
+    default: bool = False
 
 
 class LigneRejetee(BaseModel):

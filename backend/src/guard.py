@@ -208,7 +208,11 @@ def _call_classifier(text: str, client: anthropic.Anthropic) -> tuple:
             message = client.messages.create(
                 model=MODEL,
                 max_tokens=8,
-                temperature=TEMPERATURE,
+                # Meme raison qu'en agent.py : le SDK 1.x refuse `temperature`
+                # comme argument nomme, l'API l'accepte toujours dans le corps
+                # de la requete. Le classifieur doit rendre le meme verdict sur
+                # le meme texte, d'ou temperature=0 maintenue.
+                extra_body={"temperature": TEMPERATURE},
                 system=_CLASSIFIER_SYSTEM_PROMPT,
                 messages=[
                     {

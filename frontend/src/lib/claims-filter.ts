@@ -130,6 +130,64 @@ function correspondAuTexte(claim: ClaimSummary, q: string): boolean {
     .every((terme) => cible.includes(terme));
 }
 
+// ---------------------------------------------------------------------------
+// Tri
+// ---------------------------------------------------------------------------
+// La file est un outil de TRIAGE : par defaut le plus urgent remonte en tete,
+// sans que personne ait a le demander. Le tri, comme les filtres, est une
+// decision d'affichage - il vit dans l'URL et se recopie avec le lien.
+
+export const TRI_CHAMPS = ["urgence", "devis", "date"] as const;
+export type TriChamp = (typeof TRI_CHAMPS)[number];
+export type TriSens = "asc" | "desc";
+
+export interface TriFile {
+  champ: TriChamp;
+  sens: TriSens;
+}
+
+/** Urgence decroissante : critique d'abord. C'est l'ordre attendu d'une file
+ *  de traitement, et celui vers lequel toute URL incomplete degrade. */
+export const TRI_DEFAUT: TriFile = { champ: "urgence", sens: "desc" };
+
+export function lireTri(params: ParamsBruts): TriFile {
+  const champ = dansLaListe(premiere(params.tri), TRI_CHAMPS);
+  if (champ === null) return TRI_DEFAUT;
+  const sens: TriSens = premiere(params.sens) === "asc" ? "asc" : "desc";
+  return { champ, sens };
+}
+
+function comparer(a: ClaimSummary, b: ClaimSummary, champ: TriChamp): number {
+  switch (champ) {
+    case "urgence":
+      // Rang ordinal : l'index dans URGENCE_VALUES va de basse (0) a critique.
+      return (
+        URGENCE_VALUES.indexOf(a.urgence_estimee) -
+        URGENCE_VALUES.indexOf(b.urgence_estimee)
+      );
+    case "devis":
+      return a.devis_tnd - b.devis_tnd;
+    case "date":
+      // Chaines ISO : comparaison lexicographique correcte, sans objet Date.
+      return a.date_sinistre < b.date_sinistre
+        ? -1
+        : a.date_sinistre > b.date_sinistre
+          ? 1
+          : 0;
+  }
+}
+
+export function trierClaims(claims: ClaimSummary[], tri: TriFile): ClaimSummary[] {
+  const facteur = tri.sens === "asc" ? 1 : -1;
+  // Copie : sort() modifie en place, et la liste vient d'un fetch qu'on ne veut
+  // pas muter. Depart d'egalite stable par identifiant, pour un ordre
+  // reproductible d'un rendu a l'autre.
+  return [...claims].sort((a, b) => {
+    const base = comparer(a, b, tri.champ) * facteur;
+    return base !== 0 ? base : a.claim_id.localeCompare(b.claim_id);
+  });
+}
+
 export function filtrerClaims(
   claims: ClaimSummary[],
   filtres: FiltresFile,
