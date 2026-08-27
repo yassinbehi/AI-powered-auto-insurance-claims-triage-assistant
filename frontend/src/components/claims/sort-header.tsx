@@ -4,27 +4,31 @@ import { ArrowDown, ArrowUp, ChevronsUpDown } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 
-import type { TriChamp, TriFile } from "@/lib/claims-filter";
 import { cn } from "@/lib/utils";
 
 /**
- * En-tete de colonne triable de la file.
+ * En-tete de colonne triable.
  *
  * Le tri vit dans l'URL, comme les filtres (voir claims-filter-bar.tsx) : cet
  * en-tete n'est qu'un lien qui recrit `tri` et `sens`. La page, cote serveur,
  * relit ces parametres et renvoie la liste deja triee - le composant ne trie
  * rien lui-meme, il ne fait que montrer l'etat et proposer le suivant.
+ *
+ * GENERIQUE SUR LE CHAMP : la file d'attente et l'historique des analyses
+ * n'ont pas les memes colonnes triables, mais exactement le meme geste. Le
+ * parametre `C` garde chaque appel type sur SES champs a lui, et interdit de
+ * passer un champ de la file a un tableau d'analyses.
  */
-export function SortHeader({
+export function SortHeader<C extends string>({
   champ,
   label,
   tri,
   align = "left",
   ariaLabel,
 }: {
-  champ: TriChamp;
+  champ: C;
   label: string;
-  tri: TriFile;
+  tri: { champ: C; sens: "asc" | "desc" };
   align?: "left" | "right";
   /** Libelle lu par les lecteurs d'ecran quand il differe du texte visible
    *  (ex. colonne "Sinistre" qui se trie par date). */

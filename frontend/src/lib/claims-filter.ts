@@ -19,6 +19,7 @@
  */
 
 import { FORMULE_LABEL } from "@/lib/status";
+import { normaliser } from "@/lib/utils";
 import {
   TYPE_SINISTRE_VALUES,
   URGENCE_VALUES,
@@ -104,18 +105,6 @@ export function filtresActifs(filtres: FiltresFile): number {
  *  corriger en douce un choix de l'utilisateur. */
 export function datesIncoherentes(filtres: FiltresFile): boolean {
   return filtres.du !== null && filtres.au !== null && filtres.du > filtres.au;
-}
-
-/**
- * Minuscules sans accents. Indispensable sur des noms francais : sans cela,
- * "benali" ne trouve pas "Benali" ecrit avec un accent, et l'utilisateur
- * conclut que la recherche ne marche pas.
- */
-function normaliser(texte: string): string {
-  return texte
-    .normalize("NFD")
-    .replace(/\p{Diacritic}/gu, "")
-    .toLowerCase();
 }
 
 function correspondAuTexte(claim: ClaimSummary, q: string): boolean {

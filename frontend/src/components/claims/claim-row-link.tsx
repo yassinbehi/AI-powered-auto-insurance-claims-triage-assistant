@@ -7,9 +7,10 @@ import { TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 
 /**
- * Ligne de file cliquable dans son ENTIER.
+ * Ligne de tableau cliquable dans son ENTIER.
  *
- * Sur une file d'attente, on s'attend a ouvrir un dossier en cliquant sa ligne,
+ * Sert a la file d'attente et a l'historique des analyses : dans les deux cas
+ * on s'attend a ouvrir la ligne en cliquant dessus,
  * pas seulement le bouton au bout. Ce composant n'ajoute que ce confort a la
  * souris : le vrai lien accessible reste le bouton "Ouvrir" de la derniere
  * cellule, atteignable au clavier. Cliquer ailleurs sur la ligne y mene aussi.

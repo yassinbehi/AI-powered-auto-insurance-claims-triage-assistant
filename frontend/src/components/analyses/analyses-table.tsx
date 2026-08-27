@@ -18,6 +18,7 @@ import { TriangleAlert } from "lucide-react";
 import Link from "next/link";
 
 import { ClaimRowLink } from "@/components/claims/claim-row-link";
+import { SortHeader } from "@/components/claims/sort-header";
 import { PriorityBadge, TriageBadge } from "@/components/status/domain-badges";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -29,6 +30,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import type { TriAnalyses } from "@/lib/analyses-filter";
 import { formatDateHeure, formatUsd } from "@/lib/status";
 import type { AnalyseResume } from "@/lib/types";
 
@@ -50,7 +52,26 @@ function Conclusion({ analyse }: { analyse: AnalyseResume }) {
   );
 }
 
-function Vide() {
+/**
+ * DEUX ECRANS VIDES, jamais confondus : « rien n'a encore ete analyse » et
+ * « la recherche ne rend rien ». Les confondre ferait croire a une perte de
+ * donnees, exactement comme sur la file d'attente.
+ */
+function Vide({ recherche }: { recherche: boolean }) {
+  if (recherche) {
+    return (
+      <Card>
+        <CardContent className="py-10 text-center">
+          <p className="font-medium">Aucune analyse ne correspond</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Vos analyses sont toujours là : seule la recherche ne trouve rien.
+            Effacez-la pour les revoir toutes.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
   return (
     <Card>
       <CardContent className="py-10 text-center">
@@ -67,8 +88,17 @@ function Vide() {
   );
 }
 
-export function AnalysesTable({ analyses }: { analyses: AnalyseResume[] }) {
-  if (analyses.length === 0) return <Vide />;
+export function AnalysesTable({
+  analyses,
+  tri,
+  recherche = false,
+}: {
+  analyses: AnalyseResume[];
+  tri: TriAnalyses;
+  /** Une recherche est en cours : change le message de l'ecran vide. */
+  recherche?: boolean;
+}) {
+  if (analyses.length === 0) return <Vide recherche={recherche} />;
 
   return (
     <>
@@ -76,11 +106,22 @@ export function AnalysesTable({ analyses }: { analyses: AnalyseResume[] }) {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Analysé le</TableHead>
-              <TableHead>Dossier</TableHead>
-              <TableHead>Jeu de données</TableHead>
+              {/* La conclusion n'est pas triable : son ordre naturel
+                  ("standard" avant "fraude" ?) n'existe pas. La recherche
+                  libre est le bon outil pour n'en voir qu'une sorte. */}
+              <TableHead>
+                <SortHeader champ="date" label="Analysé le" tri={tri} />
+              </TableHead>
+              <TableHead>
+                <SortHeader champ="dossier" label="Dossier" tri={tri} />
+              </TableHead>
+              <TableHead>
+                <SortHeader champ="jeu" label="Jeu de données" tri={tri} />
+              </TableHead>
               <TableHead>Conclusion</TableHead>
-              <TableHead className="text-right">Coût</TableHead>
+              <TableHead className="text-right">
+                <SortHeader champ="cout" label="Coût" tri={tri} align="right" />
+              </TableHead>
               <TableHead className="w-24" />
             </TableRow>
           </TableHeader>
