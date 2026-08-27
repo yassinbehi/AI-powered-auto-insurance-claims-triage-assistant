@@ -12,6 +12,7 @@
 import type {
   ClaimDetail,
   ClaimSummary,
+  DatasetResume,
   DatasetState,
   ModelOption,
   Rules,
@@ -71,6 +72,12 @@ async function get<T>(path: string): Promise<T> {
 
 export function fetchDatasetState() {
   return get<DatasetState>("/api/dataset");
+}
+
+/** Les jeux enregistres, pour le selecteur de l'accueil. Rendu cote serveur :
+ *  la liste est la des le premier affichage, sans appel depuis le navigateur. */
+export function fetchDatasets() {
+  return get<DatasetResume[]>("/api/datasets");
 }
 
 export function fetchClaims() {

@@ -1,9 +1,10 @@
 import { ClaimsFilterBar } from "@/components/claims/claims-filter-bar";
 import { ClaimsTable } from "@/components/claims/claims-table";
 import { DatasetBar } from "@/components/dataset/dataset-bar";
+import { JeuxEnregistres } from "@/components/dataset/dataset-switcher";
 import { DatasetUpload } from "@/components/dataset/dataset-upload";
 import { PageContainer, PageHeader } from "@/components/layout/page-container";
-import { fetchClaims, fetchDatasetState } from "@/lib/api-server";
+import { fetchClaims, fetchDatasetState, fetchDatasets } from "@/lib/api-server";
 import {
   datesIncoherentes,
   filtrerClaims,
@@ -37,12 +38,16 @@ import {
 export const dynamic = "force-dynamic";
 
 export default async function AccueilPage({ searchParams }: PageProps<"/">) {
-  const dataset = await fetchDatasetState();
+  // Les deux ensemble : la liste des jeux enregistres est utile dans les DEUX
+  // etats. Sur l'ecran de depot, elle evite de redeposer des fichiers qu'on
+  // possede deja ; sur la file, elle sert a changer de jeu.
+  const [dataset, datasets] = await Promise.all([fetchDatasetState(), fetchDatasets()]);
 
   if (!dataset.loaded) {
     return (
       <PageContainer className="space-y-8">
         <DatasetUpload />
+        <JeuxEnregistres datasets={datasets} />
       </PageContainer>
     );
   }
@@ -74,7 +79,7 @@ export default async function AccueilPage({ searchParams }: PageProps<"/">) {
           </span>
         }
       />
-      <DatasetBar state={dataset} />
+      <DatasetBar state={dataset} datasets={datasets} />
       <ClaimsFilterBar datesIncoherentes={datesIncoherentes(filtres)} />
       <ClaimsTable claims={visibles} filtresActifs={nbFiltres > 0} tri={tri} />
     </PageContainer>

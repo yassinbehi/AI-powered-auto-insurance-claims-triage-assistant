@@ -266,6 +266,25 @@ class LigneRejetee(BaseModel):
     raison: str
 
 
+class DatasetResume(BaseModel):
+    """Une ligne de la liste des jeux enregistres (GET /api/datasets).
+
+    Sans le contenu : le selecteur de l'interface n'a besoin que des
+    etiquettes et des comptes, et charger huit jeux de dossiers pour afficher
+    une liste deroulante serait absurde.
+    """
+
+    id: int
+    nom: str
+    claims_filename: str
+    policies_filename: str
+    claims_count: int
+    policies_count: int
+    loaded_at: str
+    #: Celui que l'application sert en ce moment.
+    actif: bool
+
+
 class DatasetState(BaseModel):
     """Etat du jeu de donnees depose par l'utilisateur (src/dataset.py).
 
@@ -275,6 +294,14 @@ class DatasetState(BaseModel):
     """
 
     loaded: bool
+
+    # Nom donne par l'utilisateur au depot. C'est ce que l'interface affiche
+    # pour dire SUR QUOI on travaille : les noms de fichiers ne suffisent pas
+    # a distinguer deux jeux, qui s'appellent souvent tous les deux
+    # claims.csv.
+    nom: Optional[str] = None
+    dataset_id: Optional[int] = None
+
     claims_filename: Optional[str] = None
     policies_filename: Optional[str] = None
     claims_count: Optional[int] = None

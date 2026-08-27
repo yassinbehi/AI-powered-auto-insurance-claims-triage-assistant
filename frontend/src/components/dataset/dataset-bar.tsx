@@ -5,17 +5,20 @@ import { useRouter } from "next/navigation";
 import * as React from "react";
 import { toast } from "sonner";
 
+import { DatasetSwitcher } from "@/components/dataset/dataset-switcher";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { clearDataset } from "@/lib/api-client";
 import { devWarn } from "@/lib/dev-log";
-import type { DatasetState, LigneRejetee } from "@/lib/types";
+import type { DatasetResume, DatasetState, LigneRejetee } from "@/lib/types";
 
 /**
- * Rappel des fichiers en cours d'utilisation, avec le moyen d'en changer.
+ * Rappel du jeu de donnees en cours d'utilisation, avec le moyen d'en changer.
  *
  * Sans cette ligne, rien ne distinguerait a l'ecran deux jeux de dossiers
- * differents, et on pourrait travailler des heures sur le mauvais fichier.
+ * differents, et on pourrait travailler des heures sur le mauvais. C'est le
+ * NOM qui porte cette distinction depuis que les jeux sont conserves : deux
+ * fichiers appeles claims.csv se ressemblent trop pour la porter seuls.
  */
 /** Au-dela, la liste devient un mur de texte qu'on ne lit plus. Le compte
  *  total reste annonce dans le titre. */
@@ -43,7 +46,7 @@ function LignesRejetees({ rejets }: { rejets: LigneRejetee[] }) {
       <AlertDescription className="space-y-2">
         <p>
           Ces lignes ne figurent pas dans la file d&apos;attente. Corrigez-les dans
-          vos fichiers, puis rechargez-les avec « Changer de fichiers ».
+          vos fichiers, puis redéposez-les avec « Déposer d&apos;autres fichiers ».
         </p>
         <ul className="space-y-1">
           {visibles.map((rejet) => (
@@ -63,22 +66,31 @@ function LignesRejetees({ rejets }: { rejets: LigneRejetee[] }) {
   );
 }
 
-export function DatasetBar({ state }: { state: DatasetState }) {
+export function DatasetBar({
+  state,
+  datasets,
+}: {
+  state: DatasetState;
+  /** Tous les jeux enregistres, pour le selecteur. */
+  datasets: DatasetResume[];
+}) {
   const router = useRouter();
   const [enCours, setEnCours] = React.useState(false);
   // `?? []` volontaire : un backend demarre avant cette version ne renvoie pas
   // encore le champ, et l'accueil ne doit pas tomber pour autant.
   const rejets = state.lignes_rejetees ?? [];
 
-  async function changer() {
+  /** Ferme le jeu ouvert et revient a l'ecran de depot. NE SUPPRIME RIEN :
+   *  le jeu reste dans la liste et se rouvre d'un clic. */
+  async function fermer() {
     setEnCours(true);
     try {
       await clearDataset();
-      toast.success("Dossiers retirés. Chargez de nouveaux fichiers.");
+      toast.success("Jeu fermé. Il reste enregistré et peut être rouvert.");
       router.refresh();
     } catch (e) {
-      devWarn("retrait du jeu de données", e);
-      toast.error("Le retrait des dossiers a échoué.");
+      devWarn("fermeture du jeu de données", e);
+      toast.error("La fermeture du jeu a échoué.");
     } finally {
       setEnCours(false);
     }
@@ -89,24 +101,27 @@ export function DatasetBar({ state }: { state: DatasetState }) {
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border bg-muted/30 px-4 py-2.5 text-sm">
         <span className="flex items-center gap-1.5 text-muted-foreground">
           <FileSpreadsheet className="size-4" aria-hidden="true" />
-          Fichiers chargés
+          Jeu ouvert
         </span>
-        <span className="truncate font-medium">{state.claims_filename}</span>
-        <span className="truncate font-medium">{state.policies_filename}</span>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={changer}
-          disabled={enCours}
-          className="ml-auto"
-        >
-          {enCours ? (
-            <LoaderCircle className="animate-spin" aria-hidden="true" />
-          ) : (
-            <RefreshCw aria-hidden="true" />
-          )}
-          Changer de fichiers
-        </Button>
+        {/* Le nom d'abord : c'est lui que l'utilisateur a choisi et qu'il
+            reconnait. Les noms de fichiers suivent, en retrait, pour qui veut
+            verifier ce qui a ete depose. */}
+        <span className="truncate font-medium">{state.nom}</span>
+        <span className="truncate text-xs text-muted-foreground">
+          {state.claims_filename} · {state.policies_filename}
+        </span>
+
+        <div className="ml-auto flex items-center gap-1">
+          <DatasetSwitcher datasets={datasets} />
+          <Button variant="ghost" size="sm" onClick={fermer} disabled={enCours}>
+            {enCours ? (
+              <LoaderCircle className="animate-spin" aria-hidden="true" />
+            ) : (
+              <RefreshCw aria-hidden="true" />
+            )}
+            Déposer d&apos;autres fichiers
+          </Button>
+        </div>
       </div>
 
       {rejets.length > 0 ? <LignesRejetees rejets={rejets} /> : null}

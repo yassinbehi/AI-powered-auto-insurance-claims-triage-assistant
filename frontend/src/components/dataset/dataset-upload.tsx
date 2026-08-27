@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { uploadDataset } from "@/lib/api-client";
 import { devWarn } from "@/lib/dev-log";
 import { cn } from "@/lib/utils";
@@ -19,7 +20,17 @@ import { cn } from "@/lib/utils";
  * Les deux sont demandes ensemble parce qu'ils vont ensemble : une
  * declaration renvoie a un contrat, et sans le fichier des contrats il n'y a
  * rien a verifier.
+ *
+ * UN NOM EST DEMANDE AVEC LES FICHIERS. Les jeux deposes sont conserves et
+ * l'utilisateur passe de l'un a l'autre : sans nom, il choisirait entre
+ * plusieurs lignes "claims.csv" identiques. Le champ est en tete du
+ * formulaire, avant les fichiers, parce qu'il decrit ce qu'on est en train de
+ * constituer.
  */
+
+/** Meme limite que dataset_db.NOM_LONGUEUR_MAX cote Python. Le backend
+ *  revalide de toute facon : ceci n'est qu'une courtoisie de saisie. */
+const NOM_LONGUEUR_MAX = 60;
 
 const COLONNES_DECLARATIONS = [
   "claim_id",
@@ -172,23 +183,26 @@ function ChampFichier({
 
 export function DatasetUpload() {
   const router = useRouter();
+  const [nom, setNom] = React.useState("");
   const [claimsFile, setClaimsFile] = React.useState<File | null>(null);
   const [policiesFile, setPoliciesFile] = React.useState<File | null>(null);
   const [envoiEnCours, setEnvoiEnCours] = React.useState(false);
   const [erreur, setErreur] = React.useState<string | null>(null);
 
-  const pret = claimsFile !== null && policiesFile !== null;
+  const nomPropre = nom.trim();
+  const pret = nomPropre !== "" && claimsFile !== null && policiesFile !== null;
 
   async function envoyer(event: React.FormEvent) {
     event.preventDefault();
-    if (!claimsFile || !policiesFile) return;
+    if (!pret || !claimsFile || !policiesFile) return;
 
     setEnvoiEnCours(true);
     setErreur(null);
     try {
-      const etat = await uploadDataset(claimsFile, policiesFile);
+      const etat = await uploadDataset(nomPropre, claimsFile, policiesFile);
       toast.success(
-        `${etat.claims_count} déclarations et ${etat.policies_count} contrats chargés.`,
+        `« ${etat.nom} » chargé : ${etat.claims_count} déclarations et ` +
+          `${etat.policies_count} contrats.`,
       );
       // Le detail des lignes refusees reste affiche en permanence par
       // DatasetBar : ce toast ne fait qu'attirer l'oeil dessus tout de suite,
@@ -226,6 +240,28 @@ export function DatasetUpload() {
 
       <CardContent>
         <form onSubmit={envoyer} className="space-y-6">
+          <div className="space-y-2">
+            <label htmlFor="dataset-nom" className="block text-sm font-medium">
+              Nom de ce jeu de données
+            </label>
+            <Input
+              id="dataset-nom"
+              value={nom}
+              onChange={(e) => setNom(e.target.value)}
+              maxLength={NOM_LONGUEUR_MAX}
+              placeholder="Sinistres juillet 2026"
+              autoComplete="off"
+              // Le bouton d'envoi reste desactive tant que le champ est vide ;
+              // `required` double la regle pour la validation native et les
+              // technologies d'assistance.
+              required
+            />
+            <p className="text-xs text-muted-foreground">
+              Ce nom vous servira à retrouver ces dossiers et à revenir dessus
+              plus tard. Deux jeux ne peuvent pas porter le même nom.
+            </p>
+          </div>
+
           <ChampFichier
             id="claims-file"
             label="Fichier des déclarations (CSV)"
@@ -263,8 +299,9 @@ export function DatasetUpload() {
           </Button>
 
           <p className="text-xs text-muted-foreground">
-            Les fichiers restent en mémoire le temps de la session et ne sont pas
-            enregistrés sur le serveur. Après un redémarrage, il faut les redéposer.
+            Les dossiers sont enregistrés sur cette machine et restent
+            disponibles après un redémarrage. Vous pourrez passer d&apos;un jeu à
+            l&apos;autre, ou supprimer celui-ci depuis la file d&apos;attente.
           </p>
         </form>
       </CardContent>

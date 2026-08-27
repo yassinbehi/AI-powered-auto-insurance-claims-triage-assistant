@@ -20,9 +20,15 @@ serait precisement le defaut a eviter.
 
 DUREE DE VIE : les dictionnaires ci-dessous restent le chemin de LECTURE, en
 memoire dans le processus du serveur. Ils sont doubles d'une base SQLite
-(src/dataset_db.py) ecrite au moment du depot, et relue une seule fois au
-demarrage : un redemarrage du serveur ne fait donc plus perdre les fichiers
-deposes.
+(src/dataset_db.py) ecrite au moment du depot, et relue au demarrage ou lors
+d'un changement de jeu : un redemarrage du serveur ne fait donc plus perdre
+les fichiers deposes.
+
+PLUSIEURS JEUX, UN SEUL ACTIF. L'utilisateur nomme ce qu'il depose, et passe
+d'un jeu a l'autre sans redeposer ses fichiers (voir activer()). Les
+dictionnaires ci-dessous ne contiennent JAMAIS que le jeu actif : deux jeux
+peuvent porter les memes identifiants de sinistre, et les melanger ferait
+travailler le gestionnaire sur un dossier qu'il ne regarde pas.
 
 CONSEQUENCE ASSUMEE : les dossiers de l'utilisateur - noms, vehicules,
 montants, messages clients - sont desormais ECRITS SUR LE DISQUE, dans
@@ -65,6 +71,8 @@ def set_active(
     policies_filename: str = "",
     rejets: Optional[list] = None,
     loaded_at: Optional[str] = None,
+    nom: str = "",
+    dataset_id: Optional[int] = None,
     persister: bool = True,
 ) -> None:
     """Remplace le jeu de donnees actif. Les deux fichiers vont toujours
@@ -85,8 +93,13 @@ def set_active(
     demarrage a ete depose une fois, et doit continuer d'afficher CETTE
     date-la plutot que celle du redemarrage.
 
-    `persister` a False n'ecrit pas dans la base. Sert lui aussi a
-    restore_from_db(), qui vient precisement d'en sortir les donnees."""
+    `nom` est l'etiquette choisie par l'utilisateur au depot. Elle est
+    OBLIGATOIRE pour un jeu depose (elle seule permet de le reconnaitre dans
+    la liste et d'y revenir), et vide pour un jeu lu sur le disque, qui
+    n'entre de toute facon pas dans la base.
+
+    `persister` a False n'ecrit pas dans la base. Sert a restore_from_db() et
+    a activer(), qui viennent precisement d'en sortir les donnees."""
     if source not in _SOURCES:
         raise ValueError(
             f"source={source!r} inconnue : attendu {SOURCE_DEPOT!r} "
@@ -97,6 +110,8 @@ def set_active(
     _policies = policies
     _source = source
     _meta = {
+        "nom": nom,
+        "dataset_id": dataset_id,
         "claims_filename": claims_filename,
         "policies_filename": policies_filename,
         "claims_count": len(claims),
@@ -111,7 +126,8 @@ def set_active(
     # ressuscite au demarrage suivant comme s'il les avait deposes - la
     # confusion meme que ce module existe pour empecher.
     if persister and source == SOURCE_DEPOT:
-        dataset_db.save(
+        _meta["dataset_id"] = dataset_db.save(
+            nom,
             claims,
             policies,
             claims_filename=claims_filename,
@@ -122,16 +138,71 @@ def set_active(
 
 
 def clear() -> None:
-    """Retire le jeu de donnees actif, en memoire ET sur le disque.
+    """Ferme le jeu actif : l'application n'a plus de donnees a servir et
+    revient a son ecran de depot.
 
-    Les deux vont ensemble : un utilisateur qui retire ses donnees ne
-    s'attend pas a les revoir au prochain demarrage."""
+    NE SUPPRIME RIEN. Depuis que les jeux portent un nom, ils survivent a
+    leur fermeture et restent dans la liste - c'est tout l'interet de les
+    avoir nommes. Pour supprimer pour de bon, voir supprimer()."""
     global _claims, _policies, _source, _meta
     _claims = None
     _policies = None
     _source = None
     _meta = {}
-    dataset_db.clear()
+    dataset_db.desactiver()
+
+
+def liste() -> list:
+    """Les jeux enregistres, pour le selecteur de l'interface."""
+    return dataset_db.liste()
+
+
+def activer(dataset_id: int) -> bool:
+    """Change de jeu actif. False si l'identifiant est inconnu.
+
+    Le contenu est relu depuis la base et remplace INTEGRALEMENT ce qui etait
+    en memoire : aucun sinistre du jeu precedent ne survit au changement."""
+    if not dataset_db.activer(dataset_id):
+        return False
+
+    enregistre = dataset_db.load(dataset_id)
+    if enregistre is None:
+        return False
+
+    _appliquer(enregistre)
+    return True
+
+
+def supprimer(dataset_id: int) -> bool:
+    """Supprime un jeu enregistre. False si l'identifiant est inconnu.
+
+    Supprimer le jeu ACTIF revient a fermer l'application sur son ecran de
+    depot : ses donnees ne sont plus nulle part."""
+    etait_actif = _meta.get("dataset_id") == dataset_id
+    if not dataset_db.supprimer(dataset_id):
+        return False
+    if etait_actif:
+        clear()
+    return True
+
+
+def _appliquer(enregistre: dict) -> None:
+    """Installe en memoire un jeu qui SORT de la base (d'ou persister=False,
+    et d'ou la date de depot conservee telle quelle)."""
+    set_active(
+        enregistre["claims"],
+        enregistre["policies"],
+        # La base ne contient que du depot (voir set_active), donc l'origine
+        # retrouvee est necessairement celle-la.
+        source=SOURCE_DEPOT,
+        claims_filename=enregistre["claims_filename"],
+        policies_filename=enregistre["policies_filename"],
+        rejets=enregistre["lignes_rejetees"],
+        loaded_at=enregistre["loaded_at"],
+        nom=enregistre["nom"],
+        dataset_id=enregistre["id"],
+        persister=False,
+    )
 
 
 def restore_from_db() -> bool:
@@ -149,18 +220,7 @@ def restore_from_db() -> bool:
     if enregistre is None:
         return False
 
-    set_active(
-        enregistre["claims"],
-        enregistre["policies"],
-        # La base ne contient que du depot (voir set_active), donc l'origine
-        # retrouvee est necessairement celle-la.
-        source=SOURCE_DEPOT,
-        claims_filename=enregistre["claims_filename"],
-        policies_filename=enregistre["policies_filename"],
-        rejets=enregistre["lignes_rejetees"],
-        loaded_at=enregistre["loaded_at"],
-        persister=False,  # ces donnees SORTENT de la base
-    )
+    _appliquer(enregistre)
     return True
 
 

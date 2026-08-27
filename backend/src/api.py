@@ -58,18 +58,20 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import anyio
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Path, Query, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 import agent
 import dataset
+import dataset_db
 import guard
 import urgence
 from api_models import (
     ClaimDetail,
     ClaimSummary,
+    DatasetResume,
     DatasetState,
     Health,
     ModelOption,
@@ -298,20 +300,29 @@ def dataset_state() -> dict:
 
 @app.post("/api/dataset", response_model=DatasetState, tags=["donnees"])
 async def upload_dataset(
+    nom: str = Form(..., description="Nom donne par l'utilisateur a ce jeu de donnees."),
     claims_file: UploadFile = File(..., description="CSV des declarations."),
     policies_file: UploadFile = File(..., description="CSV des contrats."),
 ) -> dict:
-    """Depose les deux fichiers d'entree.
+    """Depose les deux fichiers d'entree sous un NOM, et les rend actifs.
 
-    Les deux vont ensemble et sont remplaces d'un bloc : une declaration sans
-    son contrat n'est pas exploitable, et accepter un fichier a la fois
-    laisserait l'application dans un etat incoherent.
+    Les deux fichiers vont ensemble : une declaration sans son contrat n'est
+    pas exploitable, et accepter un fichier a la fois laisserait
+    l'application dans un etat incoherent.
 
-    Le jeu de donnees vit en memoire pour la lecture, et est enregistre dans
+    `nom` est obligatoire. C'est lui qui permet de reconnaitre ce jeu dans la
+    liste et d'y revenir plus tard (GET /api/datasets) : deux fichiers
+    appeles claims.csv ne se distinguent pas, deux noms si. Un nom deja pris
+    est refuse (409) plutot que d'ecraser en silence un jeu existant.
+
+    Le jeu vit en memoire pour la lecture, et est enregistre dans
     backend/dataset.sqlite3 pour survivre a un redemarrage (voir
-    src/dataset.py et src/dataset_db.py). DELETE /api/dataset l'efface des
-    deux.
+    src/dataset.py et src/dataset_db.py).
     """
+    try:
+        nom_propre = dataset_db.valider_nom(nom)
+    except dataset_db.NomInvalide as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
     def _decode(contenu: bytes, quel_fichier: str) -> str:
         # tools.decode_csv est la source unique : la lecture disque (evals,
         # terminal, tests) et le depot HTTP doivent accepter exactement les
@@ -352,22 +363,84 @@ async def upload_dataset(
     # Le screening est memorise par claim_id : sans ce vidage, un nouveau
     # fichier reutiliserait les verdicts calcules sur l'ancien.
     guard.reset_screening_cache()
-    dataset.set_active(
-        declarations.lignes,
-        contrats.lignes,
-        source=dataset.SOURCE_DEPOT,
-        claims_filename=claims_file.filename or "",
-        policies_filename=policies_file.filename or "",
-        rejets=declarations.rejets + contrats.rejets,
-    )
+    try:
+        dataset.set_active(
+            declarations.lignes,
+            contrats.lignes,
+            source=dataset.SOURCE_DEPOT,
+            claims_filename=claims_file.filename or "",
+            policies_filename=policies_file.filename or "",
+            rejets=declarations.rejets + contrats.rejets,
+            nom=nom_propre,
+        )
+    except dataset_db.NomDejaPris as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
     return _etat_du_jeu_de_donnees()
 
 
 @app.delete("/api/dataset", response_model=DatasetState, tags=["donnees"])
 def clear_dataset() -> dict:
+    """Ferme le jeu actif : l'interface revient a son ecran de depot.
+
+    NE SUPPRIME RIEN depuis que les jeux portent un nom : le jeu ferme reste
+    dans la liste et se rouvre d'un clic. Pour supprimer pour de bon, voir
+    DELETE /api/datasets/{id}.
+    """
     guard.reset_screening_cache()
     dataset.clear()
     return _etat_du_jeu_de_donnees()
+
+
+@app.get("/api/datasets", response_model=list[DatasetResume], tags=["donnees"])
+def list_datasets() -> list:
+    """Les jeux enregistres, le plus recent d'abord. Alimente le selecteur de
+    l'interface, d'ou le contenu absent : seules les etiquettes comptent."""
+    return dataset.liste()
+
+
+@app.post("/api/datasets/{dataset_id}/activer", response_model=DatasetState, tags=["donnees"])
+def activate_dataset(dataset_id: int = Path(..., ge=1)) -> dict:
+    """Change de jeu actif, sans redeposer de fichiers.
+
+    PREND LE VERROU DE TRIAGE. Changer de jeu pendant une analyse
+    remplacerait les dossiers sous la boucle agentique en cours : elle
+    finirait sur un sinistre absent de l'ecran, ou sur un homonyme d'un autre
+    jeu. Une demande recue pendant un triage est refusee (409), comme un
+    second triage le serait.
+    """
+    _acquire_run_lock()
+    try:
+        # Le screening est memorise par claim_id, et deux jeux peuvent porter
+        # les memes identifiants : sans ce vidage, un dossier heriterait du
+        # verdict calcule sur son homonyme.
+        guard.reset_screening_cache()
+        if not dataset.activer(dataset_id):
+            raise HTTPException(
+                status_code=404, detail=f"Aucun jeu de donnees n'a l'identifiant {dataset_id}."
+            )
+        return _etat_du_jeu_de_donnees()
+    finally:
+        _RUN_LOCK.release()
+
+
+@app.delete("/api/datasets/{dataset_id}", response_model=list[DatasetResume], tags=["donnees"])
+def delete_dataset(dataset_id: int = Path(..., ge=1)) -> list:
+    """Supprime DEFINITIVEMENT un jeu enregistre et tout son contenu.
+
+    Supprimer le jeu actif ramene l'application a son ecran de depot. Renvoie
+    la liste restante, pour que l'interface se remette a jour d'un seul
+    aller-retour.
+    """
+    _acquire_run_lock()
+    try:
+        if not dataset.supprimer(dataset_id):
+            raise HTTPException(
+                status_code=404, detail=f"Aucun jeu de donnees n'a l'identifiant {dataset_id}."
+            )
+        guard.reset_screening_cache()
+        return dataset.liste()
+    finally:
+        _RUN_LOCK.release()
 
 
 # =============================================================================

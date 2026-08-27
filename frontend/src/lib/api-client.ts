@@ -8,7 +8,7 @@
  * autorise donc l'origine du frontend via CORS.
  */
 
-import type { DatasetState, Rules, Screening } from "@/lib/types";
+import type { DatasetResume, DatasetState, Rules, Screening } from "@/lib/types";
 
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
@@ -47,10 +47,14 @@ export function triageStreamUrl(claimId: string, model?: string): string {
  * exploitable, et l'API remplace le jeu de donnees d'un bloc.
  */
 export async function uploadDataset(
+  nom: string,
   claimsFile: File,
   policiesFile: File,
 ): Promise<DatasetState> {
   const corps = new FormData();
+  // Le nom accompagne les fichiers dans le meme envoi : c'est lui qui
+  // permettra de retrouver ce jeu dans la liste (409 s'il est deja pris).
+  corps.append("nom", nom);
   corps.append("claims_file", claimsFile);
   corps.append("policies_file", policiesFile);
 
@@ -67,12 +71,50 @@ export async function uploadDataset(
   return response.json() as Promise<DatasetState>;
 }
 
+/**
+ * Ferme le jeu actif. NE LE SUPPRIME PAS : il reste dans la liste et se
+ * rouvre d'un clic. Pour supprimer, voir deleteDataset.
+ */
 export async function clearDataset(): Promise<DatasetState> {
   const response = await fetch(`${API_BASE_URL}/api/dataset`, { method: "DELETE" });
   if (!response.ok) {
     throw new Error(await readDetail(response));
   }
   return response.json() as Promise<DatasetState>;
+}
+
+/** Les jeux enregistres, le plus recent d'abord. */
+export async function fetchDatasets(): Promise<DatasetResume[]> {
+  const response = await fetch(`${API_BASE_URL}/api/datasets`, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(await readDetail(response));
+  }
+  return response.json() as Promise<DatasetResume[]>;
+}
+
+/**
+ * Change de jeu actif sans redeposer de fichiers.
+ *
+ * 409 si une analyse est en cours : le backend refuse de remplacer les
+ * dossiers sous une boucle agentique qui tourne.
+ */
+export async function activateDataset(id: number): Promise<DatasetState> {
+  const response = await fetch(`${API_BASE_URL}/api/datasets/${id}/activer`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(await readDetail(response));
+  }
+  return response.json() as Promise<DatasetState>;
+}
+
+/** Supprime DEFINITIVEMENT un jeu. Renvoie la liste restante. */
+export async function deleteDataset(id: number): Promise<DatasetResume[]> {
+  const response = await fetch(`${API_BASE_URL}/api/datasets/${id}`, { method: "DELETE" });
+  if (!response.ok) {
+    throw new Error(await readDetail(response));
+  }
+  return response.json() as Promise<DatasetResume[]>;
 }
 
 /**

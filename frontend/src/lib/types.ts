@@ -88,8 +88,33 @@ export interface LigneRejetee {
   raison: string;
 }
 
+/**
+ * Une ligne de la liste des jeux enregistres (GET /api/datasets).
+ *
+ * Sans le contenu : le selecteur n'a besoin que des etiquettes et des
+ * comptes. Charger huit jeux de dossiers pour peupler une liste deroulante
+ * serait absurde.
+ */
+export interface DatasetResume {
+  id: number;
+  /** Nom donne par l'utilisateur au depot. */
+  nom: string;
+  claims_filename: string;
+  policies_filename: string;
+  claims_count: number;
+  policies_count: number;
+  loaded_at: string;
+  /** Celui que l'application sert en ce moment. */
+  actif: boolean;
+}
+
 export interface DatasetState {
   loaded: boolean;
+  /** Nom du jeu actif. `null` quand il n'y en a aucun. Les noms de fichiers
+   *  ne suffisent pas a distinguer deux jeux : ils s'appellent souvent tous
+   *  les deux claims.csv. */
+  nom?: string | null;
+  dataset_id?: number | null;
   claims_filename: string | null;
   policies_filename: string | null;
   claims_count: number | null;
