@@ -131,7 +131,16 @@ export function AnalysesTable({
                 <TableCell className="whitespace-nowrap text-muted-foreground">
                   {formatDateHeure(analyse.analyse_le)}
                 </TableCell>
-                <TableCell className="font-medium">{analyse.claim_id}</TableCell>
+                {/* L'assure sous l'identifiant, comme dans la file : c'est
+                    le nom qu'on reconnait, le code n'est qu'une reference. */}
+                <TableCell className="font-medium">
+                  <span className="block">{analyse.claim_id}</span>
+                  {analyse.assure ? (
+                    <span className="block truncate text-xs font-normal text-muted-foreground">
+                      {analyse.assure}
+                    </span>
+                  ) : null}
+                </TableCell>
                 <TableCell className="max-w-[14rem] truncate text-muted-foreground">
                   {analyse.dataset_nom || "—"}
                 </TableCell>
@@ -159,7 +168,15 @@ export function AnalysesTable({
               <CardContent className="space-y-3">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="font-medium">{analyse.claim_id}</p>
+                    <p className="font-medium">
+                      {analyse.claim_id}
+                      {analyse.assure ? (
+                        <span className="font-normal text-muted-foreground">
+                          {" · "}
+                          {analyse.assure}
+                        </span>
+                      ) : null}
+                    </p>
                     <p className="truncate text-xs text-muted-foreground">
                       {formatDateHeure(analyse.analyse_le)} · {analyse.dataset_nom || "—"}
                     </p>

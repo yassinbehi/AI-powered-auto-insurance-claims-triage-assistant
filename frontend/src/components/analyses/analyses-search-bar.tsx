@@ -22,7 +22,7 @@ import { cn } from "@/lib/utils";
  * l'annuler.
  *
  * Pas de liste deroulante ici, contrairement a la file : le champ libre
- * cherche deja dans le dossier, le jeu de donnees, le modele et la
+ * cherche deja dans l'assure, le dossier, le jeu de donnees, le modele et la
  * conclusion (voir lib/analyses-filter.ts). Ajouter trois selecteurs pour
  * refaire ce qu'une phrase fait deja encombrerait l'ecran sans rien ouvrir de
  * nouveau.
@@ -97,7 +97,7 @@ export function AnalysesSearchBar() {
           type="search"
           value={texte}
           onChange={(e) => surSaisie(e.target.value)}
-          placeholder="Rechercher un dossier, un jeu, une conclusion…"
+          placeholder="Rechercher un assuré, un dossier, une conclusion…"
           aria-label="Rechercher dans les analyses"
           className={cn("pl-9", enCours && "opacity-70")}
         />

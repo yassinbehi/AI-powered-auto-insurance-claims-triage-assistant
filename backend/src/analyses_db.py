@@ -10,20 +10,26 @@ fermeture de l'onglet, et relire une conclusion d'hier demandait de la
 racheter. Un gestionnaire doit pouvoir revenir sur ce qu'il a deja traite.
 
 CE QUI EST ENREGISTRE : le contrat de sortie tel que le modele l'a produit, le
-modele utilise, le cout, la date, et le jeu de donnees d'origine. Les ECHECS
-aussi (`erreur` renseigne, `output` a NULL) : ils ont ete factures comme les
-autres, et un historique qui ne montrerait que les reussites donnerait une
-image fausse de ce qui a ete depense.
+modele utilise, le cout, la date, le jeu de donnees d'origine, et le NOM DE
+L'ASSURE - lu dans le contrat au moment de l'analyse et recopie ici, pour que
+l'historique se cherche par nom de personne et pas seulement par identifiant
+de dossier.
+
+LES ECHECS AUSSI (`erreur` renseigne, `output` a NULL) : ils ont ete factures
+comme les autres, et un historique qui ne montrerait que les reussites
+donnerait une image fausse de ce qui a ete depense.
 
 CE QUI N'EST PAS ENREGISTRE : la trace des outils et la reponse brute du
 modele. Ce sont des elements de mise au point, deja diffuses en direct vers la
 console du navigateur (frontend/src/lib/dev-log.ts), et les conserver
 gonflerait la base sans servir a traiter un dossier.
 
-LE NOM DU JEU EST RECOPIE dans chaque ligne, et la cle etrangere passe a NULL
-si le jeu est supprime (voir le schema dans dataset_db.py). Une analyse a eu
-lieu : supprimer les fichiers d'origine ne doit pas effacer la trace de ce qui
-a ete fait, ni le cout qu'il a represente.
+LE NOM DU JEU ET CELUI DE L'ASSURE SONT RECOPIES dans chaque ligne, et la cle
+etrangere passe a NULL si le jeu est supprime (voir le schema dans
+dataset_db.py). Une analyse a eu lieu : supprimer les fichiers d'origine ne
+doit pas effacer la trace de ce qui a ete fait, ni le cout qu'il a represente.
+C'est aussi ce qui permet de chercher « Trabelsi » dans l'historique alors que
+le contrat qui portait ce nom n'existe plus nulle part.
 """
 
 import json
@@ -37,7 +43,7 @@ import dataset_db
 # afficher un tableau ne demande pas de deserialiser cinquante contrats de
 # sortie complets.
 _COLONNES_RESUME = (
-    "id, claim_id, dataset_id, dataset_nom, analyse_le, model, cost_usd, "
+    "id, claim_id, assure, dataset_id, dataset_nom, analyse_le, model, cost_usd, "
     "triage, priorite, erreur"
 )
 
@@ -46,6 +52,9 @@ def _resume(row: sqlite3.Row) -> dict:
     return {
         "id": row["id"],
         "claim_id": row["claim_id"],
+        # Chaine vide pour une analyse enregistree avant l'ajout de cette
+        # colonne, ou dont le contrat etait introuvable.
+        "assure": row["assure"] or "",
         "dataset_id": row["dataset_id"],
         "dataset_nom": row["dataset_nom"],
         "analyse_le": row["analyse_le"],
@@ -57,7 +66,9 @@ def _resume(row: sqlite3.Row) -> dict:
     }
 
 
-def enregistrer(resultat: dict, *, dataset_id=None, dataset_nom: str = "") -> Optional[int]:
+def enregistrer(
+    resultat: dict, *, dataset_id=None, dataset_nom: str = "", assure: str = ""
+) -> Optional[int]:
     """Range le retour de agent.triage_claim. Renvoie l'identifiant cree.
 
     Ne leve JAMAIS : un historique qui n'a pas pu s'ecrire ne doit pas faire
@@ -74,11 +85,13 @@ def enregistrer(resultat: dict, *, dataset_id=None, dataset_nom: str = "") -> Op
     try:
         with conn:
             curseur = conn.execute(
-                "INSERT INTO analyses (claim_id, dataset_id, dataset_nom, analyse_le, "
-                "model, cost_usd, triage, priorite, output, validation_errors, erreur) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO analyses (claim_id, assure, dataset_id, dataset_nom, "
+                "analyse_le, model, cost_usd, triage, priorite, output, "
+                "validation_errors, erreur) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     resultat.get("claim_id", ""),
+                    assure,
                     dataset_id,
                     dataset_nom,
                     datetime.now(timezone.utc).isoformat(),

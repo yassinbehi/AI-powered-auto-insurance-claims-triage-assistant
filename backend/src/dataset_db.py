@@ -106,6 +106,7 @@ CREATE TABLE IF NOT EXISTS actif (
 CREATE TABLE IF NOT EXISTS analyses (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     claim_id          TEXT NOT NULL,
+    assure            TEXT NOT NULL DEFAULT '',
     dataset_id        INTEGER REFERENCES datasets(id) ON DELETE SET NULL,
     dataset_nom       TEXT NOT NULL,
     analyse_le        TEXT NOT NULL,
@@ -194,9 +195,41 @@ def _preparer(conn: sqlite3.Connection) -> None:
                 conn.execute(f"ALTER TABLE {table} RENAME TO {table}_v1")
 
     conn.executescript(_SCHEMA)
+    _ajouter_colonnes_manquantes(conn)
 
     if a_migrer:
         _migrer_depuis_v1(conn)
+
+
+# Colonnes apparues APRES la premiere version d'une table. CREATE TABLE IF NOT
+# EXISTS ne touche pas une table deja creee : sans ce rattrapage, une base
+# existante resterait sur l'ancienne forme et toute requete nommant la nouvelle
+# colonne echouerait.
+#
+# Ajouter une colonne est la seule migration que SQLite fasse sans reecrire la
+# table. Une valeur par defaut est donc obligatoire : les lignes deja
+# enregistrees la recevront.
+_COLONNES_AJOUTEES = (
+    # (table, colonne, definition) - l'assure d'une analyse, recopie a
+    # l'enregistrement comme le nom du jeu (voir analyses_db.py).
+    ("analyses", "assure", "TEXT NOT NULL DEFAULT ''"),
+)
+
+
+def _ajouter_colonnes_manquantes(conn: sqlite3.Connection) -> None:
+    for table, colonne, definition in _COLONNES_AJOUTEES:
+        try:
+            existantes = {
+                row["name"] for row in conn.execute(f"PRAGMA table_info({table})")
+            }
+            if colonne in existantes:
+                continue
+            with conn:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {colonne} {definition}")
+        except sqlite3.Error as e:
+            _avertir(
+                f"colonne {table}.{colonne} non ajoutee ({type(e).__name__}: {e})."
+            )
 
 
 def _migrer_depuis_v1(conn: sqlite3.Connection) -> None:

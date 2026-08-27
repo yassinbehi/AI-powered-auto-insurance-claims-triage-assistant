@@ -300,6 +300,9 @@ export interface TriageResult {
 export interface AnalyseResume {
   id: number;
   claim_id: string;
+  /** Nom de l'assure, recopie a l'enregistrement. Chaine vide pour une analyse
+   *  anterieure a l'ajout de ce champ, ou dont le contrat etait introuvable. */
+  assure: string;
   /** `null` si le jeu de donnees d'origine a ete supprime depuis. */
   dataset_id: number | null;
   /** Recopie a l'enregistrement, donc toujours lisible. */

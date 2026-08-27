@@ -276,6 +276,9 @@ class AnalyseResume(BaseModel):
 
     id: int
     claim_id: str
+    #: Nom de l'assure, recopie a l'enregistrement. Vide pour une analyse
+    #: anterieure a l'ajout de ce champ, ou dont le contrat etait introuvable.
+    assure: str = ""
     #: None si le jeu de donnees d'origine a ete supprime depuis.
     dataset_id: Optional[int] = None
     #: Recopie a l'enregistrement, donc toujours lisible meme apres suppression.

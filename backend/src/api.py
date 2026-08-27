@@ -608,6 +608,23 @@ def list_models() -> list[dict]:
     ]
 
 
+def _assure_du_dossier(claim_id: str) -> str:
+    """Nom de l'assure, lu dans le contrat rattache au sinistre.
+
+    Recopie dans l'historique (voir _archiver) pour qu'il se cherche par nom de
+    personne : « Trabelsi » plutot que CLM-101, qui ne dit rien a personne.
+    Le nom vit dans le CONTRAT, pas dans la declaration, d'ou le passage par
+    policy_id.
+
+    Chaine vide si le dossier ou son contrat est introuvable - une declaration
+    sans contrat correspondant existe (voir claims_sans_contrat). Un historique
+    sans nom vaut mieux qu'une analyse qu'on n'enregistre pas.
+    """
+    claim = (dataset.get_claims() or {}).get(claim_id) or {}
+    policy = (dataset.get_policies() or {}).get(claim.get("policy_id")) or {}
+    return str(policy.get("assure") or "")
+
+
 def _archiver(resultat: dict) -> None:
     """Range une analyse terminee dans l'historique (src/analyses_db.py).
 
@@ -615,14 +632,15 @@ def _archiver(resultat: dict) -> None:
     reussites : une analyse interrompue a ete facturee, et un historique qui
     ne montrerait que les reussites donnerait une image fausse de la depense.
 
-    Le jeu de donnees est lu ICI plutot que passe en argument : c'est le
-    moment ou il est encore celui qui a servi a l'analyse.
+    Le jeu de donnees et l'assure sont lus ICI plutot que passes en argument :
+    c'est le moment ou le jeu est encore celui qui a servi a l'analyse.
     """
     etat = dataset.summary()
     analyses_db.enregistrer(
         resultat,
         dataset_id=etat.get("dataset_id"),
         dataset_nom=etat.get("nom") or "",
+        assure=_assure_du_dossier(resultat.get("claim_id", "")),
     )
 
 

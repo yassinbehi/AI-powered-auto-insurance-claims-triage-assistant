@@ -45,10 +45,16 @@ export function lireRecherche(params: ParamsBruts): string {
  * « Pièces manquantes », alors que la donnee vaut `pieces_manquantes`. Les
  * deux formes sont donc dans la cible, avec le libelle d'echec pour les
  * analyses qui n'ont pas abouti.
+ *
+ * L'ASSURE EN FAIT PARTIE, comme sur la file d'attente : on retient le nom
+ * d'une personne, pas l'identifiant d'un dossier.
  */
 function texteCherchable(analyse: AnalyseResume): string {
   const morceaux = [
     analyse.claim_id,
+    // Le nom de l'assure : on cherche un dossier par la personne bien plus
+    // souvent que par son identifiant, que personne ne retient.
+    analyse.assure,
     analyse.dataset_nom,
     analyse.model,
     analyse.triage ?? "",

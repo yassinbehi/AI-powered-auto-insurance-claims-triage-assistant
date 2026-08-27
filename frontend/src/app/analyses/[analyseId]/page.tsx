@@ -31,6 +31,7 @@ function Metadonnees({
   analyse: Awaited<ReturnType<typeof fetchAnalyse>>;
 }) {
   const lignes = [
+    ["Assuré", analyse.assure || "—"],
     ["Analysé le", formatDateHeure(analyse.analyse_le)],
     ["Jeu de données", analyse.dataset_nom || "—"],
     ["Modèle", analyse.model || "—"],
