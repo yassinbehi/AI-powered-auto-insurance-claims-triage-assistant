@@ -69,7 +69,37 @@ NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000  # utilisé par le navigateur (SS
 Les deux pointent vers la même API et diffèrent parce que la première est
 résolue depuis le serveur Next, la seconde depuis la machine du visiteur.
 
-## Lancement
+## Lancement en un clic
+
+```powershell
+powershell -ExecutionPolicy Bypass -File outils\creer-raccourci.ps1
+```
+
+À exécuter **une seule fois**. Un raccourci « TSA — Triage Sinistres Auto »
+apparaît sur le Bureau ; un double-clic démarre l'API, attend qu'elle réponde,
+démarre l'interface et ouvre le navigateur.
+
+La fenêtre noire qui s'ouvre doit **rester ouverte** : la fermer arrête
+l'application. `Ctrl+C` arrête proprement.
+
+Le lanceur (`outils/lancer.ps1`) fait trois choses qu'un simple raccourci vers
+`npm run dev` ne ferait pas :
+
+- **Il vérifie avant de démarrer** — environnement Python, `node_modules`,
+  `backend/.env` — et nomme ce qui manque avec la commande qui le répare, au
+  lieu d'échouer plus loin sur une trace illisible.
+- **Il arrête l'arbre complet des processus** en sortie (`taskkill /T`).
+  `npm run dev` engendre un processus `node` distinct : tuer `npm` seul laisse
+  un serveur orphelin sur le port 3000, et le lancement suivant échoue sans
+  raison visible.
+- **Il rattrape les ports occupés.** Si 8000 ou 3000 est déjà pris, il nomme le
+  processus et son PID, et propose de l'arrêter — c'est presque toujours un
+  lancement précédent mal terminé.
+
+Si l'un des deux serveurs s'arrête de lui-même, le lanceur le signale et arrête
+l'autre, plutôt que de laisser une moitié d'application en marche.
+
+## Lancement manuel
 
 Deux processus, dans deux terminaux :
 
