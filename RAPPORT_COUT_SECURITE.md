@@ -92,31 +92,44 @@ Les autres optimisations demandées sont également en place :
   citant le budget : commentaires et phrases de transition sont facturés en
   sortie et ignorés par le programme qui lit la réponse.
 
-## 1.5 Projection budgétaire
+## 1.5 Coût d'un passage d'évaluation — mesuré
 
 `budget_tokens.md` fixe un **plafond de 5 USD** et une **cible de 1,50 à
 2,75 USD**.
 
-Un passage complet de la suite d'évaluation, 20 cas à 0,0177 USD :
+Passage complet de la suite, mesuré (résultats bruts dans
+[`backend/evals/resultats.json`](backend/evals/resultats.json)) :
 
-| | Coût |
+| | Valeur |
 | --- | ---: |
-| Un passage d'évals (20 cas) | **~0,35 USD** |
-| Passages tenables sous la cible haute (2,75 USD) | ~7 |
-| Passages tenables sous le plafond (5 USD) | ~14 |
+| Cas évalués | 20 |
+| Dossiers réellement exécutés | 8 *(chaque `claim_id` unique n'est trié qu'une fois)* |
+| Tokens d'entrée | 28 356 |
+| Tokens de sortie | 4 389 |
+| Écriture de cache | 7 299 |
+| Lecture de cache | 226 269 |
+| Coût du triage | 0,0795 USD |
+| Coût du filtre anti-injection | 0,0025 USD |
+| **Coût total du passage** | **0,0821 USD** |
+| Coût par dossier trié | 0,0103 USD |
+| Passages tenables sous le plafond de 5 USD | **~60** |
 
-**Un écart à signaler avec l'estimation du sujet.** `budget_tokens.md` prévoit
-0,61 USD pour « 10 × 24 cas », soit environ 0,0025 USD par cas. Ce calcul
-suppose **un appel de modèle par cas** (1 250 tokens d'entrée). Une exécution
-agentique réelle en fait quatre, et chaque tour réenvoie tout le contexte : on
-mesure ~32 000 tokens d'entrée facturables par cas, soit sept fois
-l'hypothèse. Le coût réel d'un passage est donc plus proche de 0,35 USD que
-de 0,061 USD.
+**Le coût par dossier tombe de 0,0177 à 0,0103 USD en série**, parce que
+l'écriture de cache n'est payée qu'une fois pour tout le passage (7 299
+tokens) tandis que la lecture se répète (226 269 tokens à 0,10 le million).
+Plus il y a de dossiers dans un passage, moins chaque dossier coûte.
 
-Cela ne met pas le plafond en danger — c'est même précisément ce que la mise
-en cache absorbe — mais l'hypothèse « un appel par cas » du document de budget
-ne décrit pas un agent, et il vaut mieux le dire que de le découvrir en fin de
-projet.
+**Comparaison avec l'estimation du sujet.** `budget_tokens.md` prévoit
+0,61 USD pour « 10 × 24 cas », soit 0,0025 USD par cas. Le coût mesuré est de
+0,0041 USD par cas — **1,6 fois l'estimation**, pour une hypothèse de départ
+qui suppose pourtant *un seul* appel de modèle par cas là où une exécution
+agentique en fait quatre. L'écart est faible précisément parce que la mise en
+cache absorbe la majeure partie du contexte réenvoyé à chaque tour.
+
+> Une projection antérieure de ce rapport annonçait ~0,35 USD par passage.
+> Elle était fausse : elle extrapolait le coût d'une exécution **isolée**,
+> qui paie l'écriture de cache en entier, alors qu'un passage complet
+> l'amortit sur huit dossiers. Les chiffres ci-dessus sont mesurés.
 
 ## 1.6 Ce qui est mesuré en continu
 
@@ -309,12 +322,20 @@ enregistre le résultat de cette lecture filtrée et non le CSV brut.
 
 ## Synthèse
 
-**Coût.** Environ 0,018 USD par analyse sur Haiku 4.5, dont la moitié économisée
-par la mise en cache du prompt. Un passage complet des 20 cas d'évaluation
-coûte environ 0,35 USD, ce qui laisse une quinzaine de passages sous le plafond
-de 5 USD. L'estimation du document de budget suppose un appel par cas là où un
-agent en fait quatre : le coût réel est environ sept fois son hypothèse, et
-reste néanmoins largement dans l'enveloppe.
+**Coût.** Environ 0,018 USD pour une analyse isolée sur Haiku 4.5, dont la
+moitié économisée par la mise en cache du prompt. En série, le coût par dossier
+tombe à 0,0103 USD, l'écriture de cache n'étant payée qu'une fois : un passage
+complet des 20 cas d'évaluation revient à **0,0821 USD mesurés**, soit une
+soixantaine de passages sous le plafond de 5 USD. L'estimation du document de
+budget suppose un appel de modèle par cas là où un agent en fait quatre ; le
+coût réel n'est pourtant que 1,6 fois son hypothèse, parce que la mise en cache
+absorbe le contexte réenvoyé à chaque tour.
+
+**Résultats.** Les quatre seuils de « Résultats mesurables » du sujet sont
+atteints, tous à 100 % : JSON parseable, triage correct, pièces manquantes
+retrouvées, validation humaine obligatoire. Aucune vérification n'est restée
+indécise, et les deux cas porteurs d'une tentative d'injection sont classés
+correctement.
 
 **Sécurité.** Le texte client n'atteint jamais le modèle décisionnaire sans
 avoir traversé trois couches de filtrage qui échouent du côté sûr, et le

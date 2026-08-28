@@ -34,10 +34,9 @@ colonnes attendues sont rappelées sur l'écran de dépôt, et deux fichiers
 d'exemple valides s'y téléchargent en un clic — c'est le moyen le plus sûr de
 partir d'un format correct.
 
-> Le jeu de référence du dépôt (`data/claims_auto.csv`) n'est **pas** utilisable
-> tel quel : voir l'avertissement du [README](README.md). Les identifiants
-> `CLM-001` à `CLM-008` cités plus bas sont ceux de ce jeu et supposent qu'il
-> ait été réparé.
+> Les identifiants `CLM-001` à `CLM-008` cités plus bas sont ceux du jeu de
+> référence du dépôt (`data/claims_auto.csv`). Vous pouvez le déposer tel quel
+> pour reproduire exactement ce parcours.
 
 ---
 

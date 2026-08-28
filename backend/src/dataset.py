@@ -105,6 +105,33 @@ def set_active(
             f"source={source!r} inconnue : attendu {SOURCE_DEPOT!r} "
             f"(depose par l'utilisateur) ou {SOURCE_FICHIERS!r} (lu sur disque)."
         )
+    horodatage = loaded_at or datetime.now(timezone.utc).isoformat()
+    lignes_rejetees = list(rejets or [])
+
+    # ENREGISTRER D'ABORD, BASCULER LA MEMOIRE ENSUITE.
+    #
+    # save() refuse un nom vide ou deja pris. Si ce refus survenait APRES la
+    # bascule, l'application se retrouverait a servir le nouveau jeu tout en
+    # repondant a l'utilisateur que son depot a ete rejete - et le jeu
+    # precedent serait perdu sans avoir ete remplace nulle part. En cas
+    # d'echec ici, rien n'a bouge : le jeu en cours reste celui d'avant.
+    #
+    # SEUL UN JEU DEPOSE EST ENREGISTRE. Un jeu lu sur le disque
+    # (SOURCE_FICHIERS : evaluations, terminal, tests) ne doit jamais atterrir
+    # dans la base : il ecraserait les dossiers de l'utilisateur, et serait
+    # ressuscite au demarrage suivant comme s'il les avait deposes - la
+    # confusion meme que ce module existe pour empecher.
+    if persister and source == SOURCE_DEPOT:
+        dataset_id = dataset_db.save(
+            nom,
+            claims,
+            policies,
+            claims_filename=claims_filename,
+            policies_filename=policies_filename,
+            loaded_at=horodatage,
+            lignes_rejetees=lignes_rejetees,
+        )
+
     global _claims, _policies, _source, _meta
     _claims = claims
     _policies = policies
@@ -116,25 +143,9 @@ def set_active(
         "policies_filename": policies_filename,
         "claims_count": len(claims),
         "policies_count": len(policies),
-        "loaded_at": loaded_at or datetime.now(timezone.utc).isoformat(),
-        "lignes_rejetees": list(rejets or []),
+        "loaded_at": horodatage,
+        "lignes_rejetees": lignes_rejetees,
     }
-
-    # SEUL UN JEU DEPOSE EST ENREGISTRE. Un jeu lu sur le disque
-    # (SOURCE_FICHIERS : evaluations, terminal, tests) ne doit jamais atterrir
-    # dans la base : il ecraserait les dossiers de l'utilisateur, et serait
-    # ressuscite au demarrage suivant comme s'il les avait deposes - la
-    # confusion meme que ce module existe pour empecher.
-    if persister and source == SOURCE_DEPOT:
-        _meta["dataset_id"] = dataset_db.save(
-            nom,
-            claims,
-            policies,
-            claims_filename=claims_filename,
-            policies_filename=policies_filename,
-            loaded_at=_meta["loaded_at"],
-            lignes_rejetees=_meta["lignes_rejetees"],
-        )
 
 
 def clear() -> None:

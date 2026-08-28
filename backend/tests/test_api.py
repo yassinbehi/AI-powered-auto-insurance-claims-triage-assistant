@@ -16,6 +16,7 @@ data/ : c'est justement ce qui doit fonctionner sans cle API.
 import csv
 import io
 import json
+import uuid
 
 import pytest
 from fastapi.testclient import TestClient
@@ -23,6 +24,7 @@ from fastapi.testclient import TestClient
 import agent
 import api
 import dataset
+import dataset_db
 import guard
 import tools
 import urgence
@@ -118,6 +120,9 @@ def charger_jeu_de_donnees():
         source=dataset.SOURCE_DEPOT,
         claims_filename="claims_auto.csv",
         policies_filename="policies_auto.csv",
+        # Obligatoire depuis que les jeux sont nommes : set_active refuse un
+        # depot sans nom, comme le ferait l'API.
+        nom="Jeu d'essai",
     )
 
 
@@ -136,9 +141,16 @@ def _no_network(monkeypatch):
     monkeypatch.setattr(guard.anthropic, "Anthropic", _forbidden)
     guard.reset_screening_cache()
     guard.reset_guard_usage()
+    # Base videe avant chaque test : les noms de jeux sont uniques, et
+    # dataset.clear() ne fait que FERMER le jeu actif sans le supprimer. Sans
+    # ce vidage, le deuxieme test du fichier redeposerait le meme nom et
+    # recevrait NomDejaPris. (La base pointe deja sur un fichier temporaire,
+    # voir la fixture base_a_l_ecart de conftest.py.)
+    dataset_db.clear()
     charger_jeu_de_donnees()
     yield
     dataset.clear()
+    dataset_db.clear()
     guard.reset_screening_cache()
     guard.reset_guard_usage()
 
@@ -230,6 +242,8 @@ class TestDepotDesFichiers:
     def _deposer(self, claims_text=None, policies_text=None):
         return client.post(
             "/api/dataset",
+            # `nom` est obligatoire depuis que les jeux sont nommes.
+            data={"nom": f"Jeu {uuid.uuid4().hex[:8]}"},
             files={
                 "claims_file": (
                     "mes_declarations.csv",
@@ -300,6 +314,7 @@ class TestDepotDesFichiers:
         dataset.clear()
         reponse = client.post(
             "/api/dataset",
+            data={"nom": f"Jeu {uuid.uuid4().hex[:8]}"},
             files={
                 "claims_file": (nom, _declarations_utilisateur(), "text/csv"),
                 "policies_file": ("x", _texte(POLICIES_FILE), "text/csv"),
@@ -396,6 +411,7 @@ class TestLignesRejetees:
     def _deposer(self, claims_text):
         return client.post(
             "/api/dataset",
+            data={"nom": f"Jeu {uuid.uuid4().hex[:8]}"},
             files={
                 "claims_file": ("mes_declarations.csv", claims_text, "text/csv"),
                 "policies_file": ("mes_contrats.csv", _texte(POLICIES_FILE), "text/csv"),
@@ -715,7 +731,10 @@ class TestVerrou:
     def test_verrou_libere_apres_un_triage(self, monkeypatch):
         monkeypatch.setattr(
             agent, "triage_claim",
-            lambda claim_id, client=None, on_event=None: {"claim_id": claim_id, "output": {}},
+            # **kwargs : l'API passe desormais `model` (selecteur de modele).
+            lambda claim_id, client=None, on_event=None, **kwargs: {
+                "claim_id": claim_id, "output": {}
+            },
         )
         assert client.post("/api/triage/CLM-001").status_code == 200
         assert not api._RUN_LOCK.locked(), "le verrou doit etre rendu"
@@ -746,7 +765,7 @@ class TestGardeFouSSE:
 # Forme des trames SSE
 # =============================================================================
 
-def _triage_scripte(claim_id, client=None, on_event=None):
+def _triage_scripte(claim_id, client=None, on_event=None, **kwargs):
     """Doublure de agent.triage_claim : rejoue une sequence d'evenements
     representative d'un triage reel, sans appel de modele."""
     resultat = {
@@ -803,7 +822,7 @@ class TestFluxSSE:
         assert not api._RUN_LOCK.locked()
 
     def test_une_exception_du_triage_est_remontee_puis_le_flux_se_ferme(self, monkeypatch):
-        def _explose(claim_id, client=None, on_event=None):
+        def _explose(claim_id, client=None, on_event=None, **kwargs):
             raise RuntimeError("panne simulee")
 
         monkeypatch.setattr(agent, "triage_claim", _explose)
@@ -816,7 +835,7 @@ class TestFluxSSE:
         assert not api._RUN_LOCK.locked(), "meme en cas d'echec, le verrou est rendu"
 
     def test_l_evenement_error_de_l_agent_est_renomme(self, monkeypatch):
-        def _sans_json(claim_id, client=None, on_event=None):
+        def _sans_json(claim_id, client=None, on_event=None, **kwargs):
             on_event({"type": "error", "message": "pas un JSON", "raw_output": "desole"})
             return {"claim_id": claim_id, "error": "pas un JSON"}
 

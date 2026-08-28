@@ -13,18 +13,23 @@ Sujet et spécifications : [`data/SUJET_PROJET.md`](data/SUJET_PROJET.md),
 
 ---
 
-## Ce qu'il faut savoir avant de démarrer
+## Résultats mesurés
 
-> **`data/claims_auto.csv` n'est pas lisible en l'état.** Chaque ligne y est
-> enveloppée dans une paire de guillemets supplémentaire, et le fichier est
-> encodé en cp1252 au lieu d'UTF-8. Le chargeur disque renvoie donc **zéro
-> déclaration, sans lever d'erreur**. C'est la cause des 5 tests en échec et
-> des 67 erreurs de la suite, et cela empêche la suite d'évaluation de
-> tourner. `data/policies_auto.csv` est intact.
->
-> Tant que ce fichier n'est pas réparé, utilisez vos propres fichiers via
-> l'écran de dépôt de l'interface — c'est de toute façon le mode de
-> fonctionnement normal de l'application (voir « D'où viennent les données »).
+Passage complet de la suite d'évaluation, 20 cas, exécuté contre l'API réelle.
+Résultats bruts : [`backend/evals/resultats.json`](backend/evals/resultats.json).
+
+| Indicateur | Cible du sujet | Mesuré |
+| --- | --- | ---: |
+| JSON parseable | ≥ 95 % | **100 %** |
+| Triage correct | ≥ 85 % | **100 %** |
+| Pièces manquantes retrouvées | ≥ 90 % | **100 %** |
+| Validation humaine sur fraude / hors-garantie | 100 % | **100 %** |
+| Coût total | < 5 USD | **0,0821 USD** |
+
+20 cas sur 20 au bon triage, aucun écart au contrat de sortie, 36 vérifications
+exécutées, **aucune laissée indécise**. Les deux cas porteurs d'une tentative
+d'injection (CLM-002, CLM-006) sont classés correctement : l'injection
+n'aboutit pas.
 
 ---
 
@@ -98,13 +103,12 @@ pur, le rapport de coût part sur la sortie d'erreur :
 .venv/Scripts/python -m pytest backend/tests -q
 ```
 
-318 tests. **246 passent** ; les 5 échecs et 67 erreurs restants viennent tous
-du `claims_auto.csv` illisible signalé plus haut, pas du code applicatif.
+**320 tests, tous verts.**
 
 | Fichier | Tests | Couvre |
 | --- | ---: | --- |
 | `test_api.py` | 67 | endpoints, verrou de triage, flux SSE, garde-fous |
-| `test_dataset_db.py` | 37 | persistance des jeux, migrations, changement de jeu |
+| `test_dataset_db.py` | 39 | persistance des jeux, migrations, changement de jeu |
 | `test_evals.py` | 36 | harnais d'évaluation et ses heuristiques |
 | `test_tools.py` | 31 | les 5 tools déterministes |
 | `test_guard.py` | 31 | les 3 couches du filtre anti-injection |
@@ -125,10 +129,10 @@ La suite est donc gratuite et fonctionne hors ligne.
 ```
 
 20 cas dans `data/cases_evaluation.jsonl`, notés par du code (aucun juge LLM).
-**Coût réel : environ 0,35 USD par passage complet** — voir
-[`RAPPORT_COUT_SECURITE.md`](RAPPORT_COUT_SECURITE.md).
+Seuls les 8 `claim_id` uniques sont réellement triés, une fois chacun.
 
-Nécessite un `data/claims_auto.csv` lisible : voir l'avertissement en tête.
+**Coût réel mesuré : 0,0821 USD par passage complet** — détail dans
+[`RAPPORT_COUT_SECURITE.md`](RAPPORT_COUT_SECURITE.md).
 
 ---
 

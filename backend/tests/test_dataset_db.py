@@ -387,6 +387,31 @@ class TestBranchementSurLeJeuActif:
         )
         assert dataset_db.liste() == []
 
+    def test_un_depot_refuse_laisse_le_jeu_precedent_en_place(self):
+        """Regression. set_active enregistrait APRES avoir bascule la memoire :
+        un nom deja pris renvoyait une erreur a l'utilisateur alors que
+        l'application servait deja le nouveau jeu, et l'ancien etait perdu sans
+        avoir ete remplace nulle part."""
+        dataset.set_active(_CLAIMS, _POLICIES, source=dataset.SOURCE_DEPOT, nom="Premier")
+        premier = dataset.summary()["dataset_id"]
+
+        autres = {"CLM-999": dict(_CLAIMS["CLM-001"], claim_id="CLM-999")}
+        with pytest.raises(dataset_db.NomDejaPris):
+            dataset.set_active(autres, _POLICIES, source=dataset.SOURCE_DEPOT, nom="Premier")
+
+        # Rien n'a bouge : ni la memoire, ni la base.
+        assert list(dataset.get_claims()) == ["CLM-001"]
+        assert dataset.summary()["dataset_id"] == premier
+        assert len(dataset_db.liste()) == 1
+
+    def test_un_depot_sans_nom_laisse_le_jeu_precedent_en_place(self):
+        dataset.set_active(_CLAIMS, _POLICIES, source=dataset.SOURCE_DEPOT, nom="Premier")
+
+        with pytest.raises(dataset_db.NomInvalide):
+            dataset.set_active(_CLAIMS, _POLICIES, source=dataset.SOURCE_DEPOT, nom="  ")
+
+        assert dataset.summary()["nom"] == "Premier"
+
     def test_fermer_le_jeu_ne_le_supprime_pas(self):
         dataset.set_active(_CLAIMS, _POLICIES, source=dataset.SOURCE_DEPOT, nom="Juillet")
         dataset.clear()
